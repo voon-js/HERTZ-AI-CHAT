@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
+import 'about_page.dart';
+import 'privacy_security_page.dart';
 
 class SettingsPage extends StatelessWidget {
   final bool isDark;
@@ -26,8 +28,9 @@ class SettingsPage extends StatelessWidget {
 
     return Scaffold(
       backgroundColor: bg,
-      body: Column(
-        children: [
+      body: SafeArea(
+        child: Column(
+          children: [
           // Header
           Container(
             height: 56,
@@ -141,6 +144,8 @@ class SettingsPage extends StatelessWidget {
                         _SettingsRow(
                           icon: Icons.notifications_outlined,
                           label: 'NOTIFICATIONS',
+                          description:
+                              'Alerts, sounds, and future reminder controls.',
                           textColor: textColor,
                           hoverBg: hoverBg,
                           borderColor: borderColor,
@@ -149,18 +154,36 @@ class SettingsPage extends StatelessWidget {
                         _SettingsRow(
                           icon: Icons.shield_outlined,
                           label: 'PRIVACY & SECURITY',
+                          description:
+                              'Local storage, device access, and model privacy.',
                           textColor: textColor,
                           hoverBg: hoverBg,
                           borderColor: borderColor,
                           showDivider: true,
+                          onTap: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => PrivacySecurityPage(isDark: isDark),
+                              ),
+                            );
+                          },
                         ),
                         _SettingsRow(
                           icon: Icons.info_outline,
                           label: 'ABOUT',
+                          description:
+                              'Build details, app purpose, and local AI notes.',
                           textColor: textColor,
                           hoverBg: hoverBg,
                           borderColor: borderColor,
                           showDivider: false,
+                          onTap: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => AboutPage(isDark: isDark),
+                              ),
+                            );
+                          },
                         ),
                       ],
                     ),
@@ -169,7 +192,8 @@ class SettingsPage extends StatelessWidget {
               ),
             ),
           ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -217,18 +241,22 @@ class _SectionHeader extends StatelessWidget {
 class _SettingsRow extends StatelessWidget {
   final IconData icon;
   final String label;
+  final String? description;
   final Color textColor;
   final Color hoverBg;
   final Color borderColor;
   final bool showDivider;
+  final VoidCallback? onTap;
 
   const _SettingsRow({
     required this.icon,
     required this.label,
+    this.description,
     required this.textColor,
     required this.hoverBg,
     required this.borderColor,
     required this.showDivider,
+    this.onTap,
   });
 
   @override
@@ -236,7 +264,9 @@ class _SettingsRow extends StatelessWidget {
     return Column(
       children: [
         InkWell(
-          onTap: () {},
+          onTap: onTap,
+          hoverColor: hoverBg,
+          splashColor: hoverBg.withValues(alpha: 0.35),
           child: Padding(
             padding: const EdgeInsets.symmetric(
                 horizontal: 16, vertical: 14),
@@ -245,15 +275,31 @@ class _SettingsRow extends StatelessWidget {
                 Icon(icon, color: textColor, size: 20),
                 const SizedBox(width: 16),
                 Expanded(
-                  child: Text(
-                    label,
-                    style: TextStyle(
-                      fontFamily: 'Courier',
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      color: textColor,
-                      letterSpacing: 2,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        label,
+                        style: TextStyle(
+                          fontFamily: 'Courier',
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: textColor,
+                          letterSpacing: 2,
+                        ),
+                      ),
+                      if (description != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          description!,
+                          style: TextStyle(
+                            fontFamily: 'Courier',
+                            fontSize: 11,
+                            color: textColor.withValues(alpha: 0.65),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
                 Icon(Icons.chevron_right,

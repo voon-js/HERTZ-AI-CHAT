@@ -1,10 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'theme/app_theme.dart';
 import 'pages/chat_page.dart';
 import 'pages/settings_page.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await SystemChrome.setEnabledSystemUIMode(
+    SystemUiMode.manual,
+    overlays: [SystemUiOverlay.top, SystemUiOverlay.bottom],
+  );
   runApp(const MyApp());
 }
 
@@ -16,7 +22,7 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
-  ThemeMode _themeMode = ThemeMode.system;
+  ThemeMode _themeMode = ThemeMode.light;
 
   @override
   void initState() {
@@ -94,29 +100,47 @@ class _AppShellState extends State<AppShell> {
           );
 
     if (isDesktop) {
-      return Scaffold(
-        backgroundColor:
-            widget.isDark ? Colors.black : const Color(0xFFF9FAFB),
-        body: Center(
-          child: Container(
-            width: 400,
-            height: 850,
-            decoration: BoxDecoration(
-              color: widget.isDark ? Colors.black : Colors.white,
-              border: Border.all(
-                color: widget.isDark
-                    ? const Color(0xFF27272A)
-                    : Colors.black,
+      return PopScope(
+        canPop: !_showSettings,
+        onPopInvokedWithResult: (didPop, _) {
+          if (didPop) return;
+          if (_showSettings) {
+            setState(() => _showSettings = false);
+          }
+        },
+        child: Scaffold(
+          backgroundColor:
+              widget.isDark ? Colors.black : const Color(0xFFF9FAFB),
+          body: Center(
+            child: Container(
+              width: 400,
+              height: 850,
+              decoration: BoxDecoration(
+                color: widget.isDark ? Colors.black : Colors.white,
+                border: Border.all(
+                  color: widget.isDark
+                      ? const Color(0xFF27272A)
+                      : Colors.black,
+                ),
+                borderRadius: BorderRadius.circular(2),
               ),
-              borderRadius: BorderRadius.circular(2),
+              clipBehavior: Clip.hardEdge,
+              child: content,
             ),
-            clipBehavior: Clip.hardEdge,
-            child: content,
           ),
         ),
       );
     }
 
-    return content;
+    return PopScope(
+      canPop: !_showSettings,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_showSettings) {
+          setState(() => _showSettings = false);
+        }
+      },
+      child: content,
+    );
   }
 }

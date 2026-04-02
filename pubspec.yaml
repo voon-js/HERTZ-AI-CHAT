@@ -10,6 +10,10 @@ dependencies:
   flutter:
     sdk: flutter
   shared_preferences: ^2.2.2
+  # LLM Backend Dependencies
+  http: ^1.1.0              # Model download
+  path_provider: ^2.1.0     # App files directory
+  ffi: ^2.1.0               # Dart FFI bindings
 
 dev_dependencies:
   flutter_test:

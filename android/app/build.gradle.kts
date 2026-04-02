@@ -28,6 +28,25 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // ============================================================
+        // NDK Configuration for Native Build
+        // ============================================================
+        // Only build for ARM64 (Android production standard)
+        ndk {
+            abiFilters.clear()
+            abiFilters.add("arm64-v8a")
+        }
+    }
+
+    // ============================================================
+    // External Native Build Configuration (llama.cpp)
+    // ============================================================
+    externalNativeBuild {
+        cmake {
+            path = file("../cpp/CMakeLists.txt")
+            version = "3.22.1"               // CMake version (adjust if needed)
+        }
     }
 
     buildTypes {
