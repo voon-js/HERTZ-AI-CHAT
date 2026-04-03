@@ -38,6 +38,11 @@ typedef GenerateDart = int Function(
   ffi.Pointer<ffi.NativeFunction<TokenCallbackNative>> callback,
 );
 
+// === Stop Generation ===
+typedef StopGenerationNative = ffi.Void Function();
+
+typedef StopGenerationDart = void Function();
+
 // === Free ===
 typedef FreeNative = ffi.Void Function(ffi.Pointer<ffi.Void> ctx);
 
@@ -62,6 +67,7 @@ class LlmFFI {
   // Function pointers (resolved lazily)
   late final InitModelDart _initModel;
   late final GenerateDart _generate;
+  late final StopGenerationDart _stopGeneration;
   late final FreeDart _free;
   late final GetErrorDart _getError;
 
@@ -81,6 +87,10 @@ class LlmFFI {
     _generate = lib
         .lookup<ffi.NativeFunction<GenerateNative>>('llama_generate')
         .asFunction();
+
+    _stopGeneration = lib
+      .lookup<ffi.NativeFunction<StopGenerationNative>>('llama_stop_generation')
+      .asFunction();
 
     _free =
       lib.lookup<ffi.NativeFunction<FreeNative>>('llama_free_context').asFunction();
@@ -149,6 +159,12 @@ class LlmFFI {
     } finally {
       ffi_pkg.malloc.free(promptPtr);
     }
+  }
+
+  /// Request the active generation loop to stop.
+  void stopGeneration() {
+    _ensureInitialized();
+    _stopGeneration();
   }
 
   /// Free model context and all resources

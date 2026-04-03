@@ -142,6 +142,11 @@ class AIService {
     }
   }
 
+  void stopGenerating() {
+    if (!_isGeneratingInWorker) return;
+    _workerLlm.stopGeneration();
+  }
+
   void dispose() {
     unawaited(_stopWorker());
   }

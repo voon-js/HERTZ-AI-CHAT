@@ -4,15 +4,19 @@ import '../theme/app_theme.dart';
 class ChatInputBar extends StatefulWidget {
   final VoidCallback onOpenFileUpload;
   final ValueChanged<String> onSend;
+  final VoidCallback onStop;
   final bool isInputEnabled;
   final bool areActionsEnabled;
+  final bool isGenerating;
 
   const ChatInputBar({
     super.key,
     required this.onOpenFileUpload,
     required this.onSend,
+    required this.onStop,
     this.isInputEnabled = true,
     this.areActionsEnabled = true,
+    this.isGenerating = false,
   });
 
   @override
@@ -24,7 +28,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
   bool _hasText = false;
 
   void _submit() {
-    if (!widget.areActionsEnabled) return;
+    if (!widget.areActionsEnabled || widget.isGenerating) return;
     final text = _controller.text.trim();
     if (text.isEmpty) return;
 
@@ -132,32 +136,40 @@ class _ChatInputBarState extends State<ChatInputBar> {
 
           // Send button
           GestureDetector(
-            onTap: (_hasText && widget.areActionsEnabled) ? _submit : null,
+            onTap: widget.isGenerating
+                ? widget.onStop
+                : ((_hasText && widget.areActionsEnabled) ? _submit : null),
             child: Container(
               width: 44,
               height: 44,
               margin: const EdgeInsets.only(bottom: 2),
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: (_hasText && widget.areActionsEnabled)
+                color: widget.isGenerating
                     ? nothingRed
-                    : Colors.transparent,
+                    : (_hasText && widget.areActionsEnabled)
+                        ? nothingRed
+                        : Colors.transparent,
                 border: Border.all(
-                  color: (_hasText && widget.areActionsEnabled)
+                  color: widget.isGenerating
                       ? nothingRed
-                      : (isDark
-                          ? const Color(0xFF3F3F46)
-                          : Colors.black),
+                      : (_hasText && widget.areActionsEnabled)
+                          ? nothingRed
+                          : (isDark
+                              ? const Color(0xFF3F3F46)
+                              : Colors.black),
                 ),
               ),
               child: Icon(
-                Icons.send,
+                widget.isGenerating ? Icons.stop : Icons.send,
                 size: 18,
-                color: (_hasText && widget.areActionsEnabled)
+                color: widget.isGenerating
                     ? Colors.white
-                    : (isDark
-                        ? const Color(0xFF52525B)
-                        : const Color(0xFF9CA3AF)),
+                    : (_hasText && widget.areActionsEnabled)
+                        ? Colors.white
+                        : (isDark
+                            ? const Color(0xFF52525B)
+                            : const Color(0xFF9CA3AF)),
               ),
             ),
           ),

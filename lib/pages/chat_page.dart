@@ -39,6 +39,7 @@ class _ChatPageState extends State<ChatPage>
   bool _showFirstLoadScreen = false;
   double? _firstLoadProgress;
   String _firstLoadStatus = 'Preparing TinyLlama Q4...';
+  String? _firstLoadErrorText;
   String? _errorText;
   late final AnimationController _pulseController;
   Timer? _historySaveTimer;
@@ -90,6 +91,7 @@ class _ChatPageState extends State<ChatPage>
       _showFirstLoadScreen = !firstLoadDone;
       _firstLoadProgress = null;
       _firstLoadStatus = 'Preparing TinyLlama Q4...';
+      _firstLoadErrorText = null;
     });
 
     unawaited(_loadHistory());
@@ -103,7 +105,32 @@ class _ChatPageState extends State<ChatPage>
 
     if (mounted) {
       setState(() {
-        _showFirstLoadScreen = false;
+        // Keep overlay visible on first-load failure so error stays on same screen.
+        _showFirstLoadScreen = !firstLoadDone && !initialized;
+      });
+    }
+  }
+
+  Future<void> _retryFirstLoad() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    if (!mounted) return;
+    setState(() {
+      _firstLoadErrorText = null;
+      _firstLoadProgress = null;
+      _firstLoadStatus = 'Retrying TinyLlama Q4 setup...';
+    });
+
+    final initialized = await _initModel(isFirstLoad: true);
+    if (!mounted) return;
+
+    if (initialized) {
+      await prefs.setBool(_firstLoadDoneKey, true);
+    }
+
+    if (mounted) {
+      setState(() {
+        _showFirstLoadScreen = !initialized;
       });
     }
   }
@@ -258,6 +285,7 @@ class _ChatPageState extends State<ChatPage>
       if (isFirstLoad) {
         _firstLoadStatus = 'Preparing TinyLlama Q4...';
         _firstLoadProgress = null;
+        _firstLoadErrorText = null;
       }
     });
 
@@ -279,6 +307,7 @@ class _ChatPageState extends State<ChatPage>
                   _firstLoadStatus = percent == null
                       ? 'Downloading TinyLlama Q4...'
                       : 'Downloading TinyLlama Q4... $percent%';
+                  _firstLoadErrorText = null;
                 });
               }
             : null,
@@ -293,6 +322,11 @@ class _ChatPageState extends State<ChatPage>
       setState(() {
         _isInitializing = false;
         _errorText = 'Init failed: $e';
+        if (isFirstLoad) {
+          _firstLoadErrorText =
+              'Failed to load TinyLlama Q4. Please check your internet connection and try again.';
+          _firstLoadStatus = 'Setup failed.';
+        }
       });
       return false;
     }
@@ -352,6 +386,11 @@ class _ChatPageState extends State<ChatPage>
         _scrollChatToBottom();
       }
     }
+  }
+
+  void _stopGenerating() {
+    if (!_isGenerating) return;
+    _ai.stopGenerating();
   }
 
   void _handleBlockedBack(bool keyboardOpen) {
@@ -529,8 +568,10 @@ class _ChatPageState extends State<ChatPage>
                       setState(() => _isFileUploadOpen = true);
                     },
                     onSend: _sendPrompt,
+                    onStop: _stopGenerating,
                     isInputEnabled: !_isInitializing,
                     areActionsEnabled: !_isInitializing && !_isGenerating,
+                    isGenerating: _isGenerating,
                   ),
                 ),
               ],
@@ -641,6 +682,53 @@ class _ChatPageState extends State<ChatPage>
                   color: subtitleColor,
                 ),
               ),
+              if (_firstLoadErrorText != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? const Color(0xFF2A1215)
+                        : const Color(0xFFFFE4E6),
+                    border: Border.all(color: const Color(0xFFEF4444)),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                  child: Text(
+                    _firstLoadErrorText!,
+                    style: TextStyle(
+                      fontFamily: 'Courier',
+                      fontSize: 11,
+                      color: isDark
+                          ? const Color(0xFFFCA5A5)
+                          : const Color(0xFFB91C1C),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: _isInitializing ? null : _retryFirstLoad,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: nothingRed,
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: nothingRed.withValues(alpha: 0.4),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    child: const Text(
+                      'RETRY',
+                      style: TextStyle(
+                        fontFamily: 'Courier',
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 2,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

@@ -16,6 +16,7 @@
 static thread_local char g_error_buffer[512] = {0};
 static std::once_flag g_backend_init_once;
 static std::atomic<int> g_active_contexts{0};
+static std::atomic<bool> g_cancel_requested{false};
 
 struct LlamaContextWrapper {
     llama_model * model = nullptr;
@@ -164,6 +165,8 @@ int llama_generate(
         max_tokens = 1;
     }
 
+    g_cancel_requested.store(false);
+
     auto * wrapper = reinterpret_cast<LlamaContextWrapper *>(ctx);
 
     bool expected = false;
@@ -205,6 +208,10 @@ int llama_generate(
             }
 
             for (int i = 0; rc == 0 && i < max_tokens; ++i) {
+                if (g_cancel_requested.load()) {
+                    break;
+                }
+
                 const llama_token token = llama_sampler_sample(wrapper->sampler, wrapper->ctx, -1);
 
                 if (llama_vocab_is_eog(wrapper->vocab, token)) {
@@ -249,8 +256,13 @@ int llama_generate(
         rc = -1;
     }
 
+    g_cancel_requested.store(false);
     wrapper->is_generating = false;
     return rc;
+}
+
+void llama_stop_generation(void) {
+    g_cancel_requested.store(true);
 }
 
 void llama_free_context(LlamaContext ctx) {

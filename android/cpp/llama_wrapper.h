@@ -73,6 +73,12 @@ int llama_generate(
 );
 
 /**
+ * Request the currently running generation pass to stop as soon as possible.
+ * Safe to call from another thread while llama_generate() is running.
+ */
+void llama_stop_generation(void);
+
+/**
  * Free model context and all associated resources.
  * 
  * Must be called when done (before app exit, on user logout, etc.)
