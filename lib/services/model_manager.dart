@@ -2,6 +2,8 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
+import 'notification_service.dart';
+
 /// Manages model file lifecycle: download, storage, existence checks
 class ModelManager {
   static final ModelManager _instance = ModelManager._();
@@ -9,6 +11,9 @@ class ModelManager {
   factory ModelManager() => _instance;
 
   ModelManager._();
+
+  final NotificationService _notificationService = NotificationService();
+  bool _shouldCancelDownloads = false;
 
   /// Check if model exists and is readable
   /// 
@@ -66,6 +71,12 @@ class ModelManager {
     void Function(int received, int total)? onProgress,
   }) async {
     final file = await _getModelFile(modelName);
+    final partialFile = File('${file.path}.part');
+
+    if (partialFile.existsSync()) {
+      partialFile.deleteSync();
+      print('[ModelManager] Removed stale partial download: ${partialFile.path}');
+    }
 
     // Skip if already exists
     if (file.existsSync()) {
@@ -87,47 +98,112 @@ class ModelManager {
 
       final total = response.contentLength ?? 0;
       int received = 0;
+      int? lastNotifiedPercent;
 
-      // Open file for writing
-      final sink = file.openWrite();
+      // Download to a temporary file first, then rename atomically.
+      final sink = partialFile.openWrite();
+
+      await _notificationService.showDownloadProgress(
+        modelName: modelName,
+        received: 0,
+        total: total,
+      );
 
       try {
-        await response.stream.listen(
-          (chunk) {
-            received += chunk.length;
-            onProgress?.call(received, total);
-            sink.add(chunk);
+        await for (final chunk in response.stream) {
+          // Check if download was cancelled
+          if (_shouldCancelDownloads) {
+            await sink.close();
+            if (partialFile.existsSync()) {
+              partialFile.deleteSync();
+            }
+            throw Exception('Download cancelled by user');
+          }
 
-            // Log progress every 10%
-            if (total > 0 && received % (total ~/ 10 + 1) == 0) {
-              final pct = (received / total * 100).toStringAsFixed(1);
-              print('[ModelManager] Download progress: $pct%');
+          received += chunk.length;
+          onProgress?.call(received, total);
+          sink.add(chunk);
+
+          if (total > 0) {
+            final percent = ((received / total) * 100).clamp(0, 100).round();
+            if (lastNotifiedPercent == null || percent != lastNotifiedPercent) {
+              lastNotifiedPercent = percent;
+              await _notificationService.showDownloadProgress(
+                modelName: modelName,
+                received: received,
+                total: total,
+              );
             }
-          },
-          onDone: () async {
-            await sink.close();
-            print('[ModelManager] ✓ Download complete: ${file.path}');
-            print('[ModelManager]   Size: ${await file.length()} bytes');
-          },
-          onError: (e) async {
-            await sink.close();
-            if (file.existsSync()) {
-              file.deleteSync();
-            }
-            throw Exception('Download stream error: $e');
-          },
-          cancelOnError: true,
-        ).asFuture();
-      } catch (e) {
+          } else {
+            await _notificationService.showDownloadProgress(
+              modelName: modelName,
+              received: received,
+              total: total,
+            );
+          }
+
+          // Log progress every 10%
+          if (total > 0 && received % (total ~/ 10 + 1) == 0) {
+            final pct = (received / total * 100).toStringAsFixed(1);
+            print('[ModelManager] Download progress: $pct%');
+          }
+        }
+
         await sink.close();
         if (file.existsSync()) {
           file.deleteSync();
+        }
+        partialFile.renameSync(file.path);
+
+        await _notificationService.showDownloadCompleted(modelName);
+
+        print('[ModelManager] ✓ Download complete: ${file.path}');
+        print('[ModelManager]   Size: ${await file.length()} bytes');
+      } catch (e) {
+        await sink.close();
+        if (partialFile.existsSync()) {
+          partialFile.deleteSync();
         }
         rethrow;
       }
     } catch (e) {
       print('[ModelManager] ✗ Download failed: $e');
+      if (!e.toString().contains('cancelled')) {
+        await _notificationService.showDownloadFailed(modelName);
+      }
       rethrow;
+    }
+  }
+
+  /// Request cancellation of all active downloads
+  void requestCancelDownloads() {
+    _shouldCancelDownloads = true;
+  }
+
+  /// Clear cancellation state for next download session
+  void clearCancellationState() {
+    _shouldCancelDownloads = false;
+  }
+
+  /// Cancel all active downloads and clean up partial files
+  Future<void> cancelAllDownloads() async {
+    _shouldCancelDownloads = true;
+    
+    // Give a moment for the download loop to exit
+    await Future.delayed(const Duration(milliseconds: 100));
+    
+    // Clean up all partial files
+    try {
+      final dir = await _getModelsDirectory();
+      final files = dir.listSync();
+      for (final file in files) {
+        if (file.path.endsWith('.part')) {
+          File(file.path).deleteSync();
+          print('[ModelManager] Cleaned up partial file: ${file.path}');
+        }
+      }
+    } catch (e) {
+      print('[ModelManager] Error cleaning up partial files: $e');
     }
   }
 
@@ -138,6 +214,12 @@ class ModelManager {
       if (file.existsSync()) {
         file.deleteSync();
         print('[ModelManager] ✓ Deleted model: ${file.path}');
+      }
+
+      final partialFile = File('${file.path}.part');
+      if (partialFile.existsSync()) {
+        partialFile.deleteSync();
+        print('[ModelManager] ✓ Deleted partial model: ${partialFile.path}');
       }
     } catch (e) {
       print('[ModelManager] Error deleting model: $e');

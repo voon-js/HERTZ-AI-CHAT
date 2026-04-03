@@ -10,6 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   shared_preferences: ^2.2.2
+  flutter_local_notifications: ^17.2.3
   # LLM Backend Dependencies
   http: ^1.1.0              # Model download
   path_provider: ^2.1.0     # App files directory

@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+
+import '../services/model_catalog.dart';
+import '../services/model_manager.dart';
 import '../theme/app_theme.dart';
 
-class ModelSelectorOverlay extends StatelessWidget {
+class ModelSelectorOverlay extends StatefulWidget {
   final bool isOpen;
   final VoidCallback onClose;
   final String currentModel;
@@ -16,46 +19,84 @@ class ModelSelectorOverlay extends StatelessWidget {
   });
 
   @override
+  State<ModelSelectorOverlay> createState() => _ModelSelectorOverlayState();
+}
+
+class _ModelSelectorOverlayState extends State<ModelSelectorOverlay> {
+  final ModelManager _modelManager = ModelManager();
+  late Future<Map<String, List<ModelCatalogEntry>>> _modelsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _modelsFuture = _categorizeModels();
+  }
+
+  @override
+  void didUpdateWidget(covariant ModelSelectorOverlay oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!oldWidget.isOpen && widget.isOpen) {
+      setState(() {
+        _modelsFuture = _categorizeModels();
+      });
+    }
+  }
+
+  Future<Map<String, List<ModelCatalogEntry>>> _categorizeModels() async {
+    final downloaded = <ModelCatalogEntry>[];
+    final available = <ModelCatalogEntry>[];
+
+    for (final model in ModelCatalog.models) {
+      final exists = await _modelManager.modelExists(model.filename);
+      if (exists) {
+        downloaded.add(model);
+      } else {
+        available.add(model);
+      }
+    }
+
+    return {
+      'downloaded': downloaded,
+      'available': available,
+    };
+  }
+
+  @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bg = isDark ? Colors.black : Colors.white;
     final textColor = isDark ? Colors.white : Colors.black;
-    final borderColor =
-        isDark ? const Color(0xFF27272A) : Colors.black;
+    final borderColor = isDark ? const Color(0xFF27272A) : Colors.black;
     final subtitleColor =
         isDark ? const Color(0xFF71717A) : const Color(0xFF6B7280);
-    final handleColor =
-        isDark ? const Color(0xFF3F3F46) : Colors.black;
+    final handleColor = isDark ? const Color(0xFF3F3F46) : Colors.black;
 
     return Positioned.fill(
       child: ClipRect(
         child: Stack(
           children: [
-            // Backdrop
             AnimatedOpacity(
               duration: const Duration(milliseconds: 300),
-              opacity: isOpen ? 1.0 : 0.0,
+              opacity: widget.isOpen ? 1.0 : 0.0,
               child: IgnorePointer(
-                ignoring: !isOpen,
+                ignoring: !widget.isOpen,
                 child: GestureDetector(
-                  onTap: onClose,
+                  onTap: widget.onClose,
                   child: Container(
                     color: Colors.black.withValues(alpha: 0.4),
                   ),
                 ),
               ),
             ),
-
-            // Bottom sheet
             Align(
               alignment: Alignment.bottomCenter,
               child: AnimatedSlide(
                 duration: const Duration(milliseconds: 300),
                 curve: Curves.easeOut,
-                offset: isOpen ? Offset.zero : const Offset(0, 1.05),
+                offset: widget.isOpen ? Offset.zero : const Offset(0, 1.05),
                 child: AnimatedOpacity(
                   duration: const Duration(milliseconds: 220),
-                  opacity: isOpen ? 1.0 : 0.0,
+                  opacity: widget.isOpen ? 1.0 : 0.0,
                   child: Container(
                     constraints: BoxConstraints(
                       maxHeight: MediaQuery.of(context).size.height * 0.8,
@@ -72,7 +113,6 @@ class ModelSelectorOverlay extends StatelessWidget {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          // Handle
                           Container(
                             width: 48,
                             height: 4,
@@ -82,8 +122,6 @@ class ModelSelectorOverlay extends StatelessWidget {
                               borderRadius: BorderRadius.circular(2),
                             ),
                           ),
-
-                          // Header
                           Container(
                             padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
                             decoration: BoxDecoration(
@@ -105,92 +143,82 @@ class ModelSelectorOverlay extends StatelessWidget {
                               ),
                             ),
                           ),
-
-                          // Model list
                           Flexible(
                             child: SingleChildScrollView(
                               padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  Container(
-                                    margin: const EdgeInsets.only(bottom: 12),
-                                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                                    child: Text(
-                                      'CURRENT MODEL',
-                                      style: TextStyle(
-                                        fontFamily: 'Courier',
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.bold,
-                                        color: subtitleColor,
-                                        letterSpacing: 3,
+                              child: FutureBuilder<Map<String, List<ModelCatalogEntry>>>(
+                                future: _modelsFuture,
+                                builder: (context, snapshot) {
+                                  if (!snapshot.hasData) {
+                                    return Padding(
+                                      padding: const EdgeInsets.all(24),
+                                      child: Center(
+                                        child: CircularProgressIndicator(
+                                          color: isDark ? Colors.white : Colors.black,
+                                        ),
                                       ),
-                                    ),
-                                  ),
-                                  GestureDetector(
-                                    onTap: onClose,
-                                    child: Container(
-                                      margin: const EdgeInsets.only(bottom: 8),
-                                      padding: const EdgeInsets.all(16),
-                                      decoration: BoxDecoration(
-                                        border: Border.all(color: nothingRed),
-                                        borderRadius: BorderRadius.circular(2),
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  currentModel.toUpperCase(),
-                                                  style: const TextStyle(
-                                                    fontFamily: 'Courier',
-                                                    fontSize: 13,
-                                                    fontWeight: FontWeight.bold,
-                                                    color: nothingRed,
-                                                    letterSpacing: 2,
-                                                  ),
-                                                ),
-                                                const SizedBox(height: 4),
-                                                Text(
-                                                  'Installed on-device model',
-                                                  style: TextStyle(
-                                                    fontSize: 12,
-                                                    color: subtitleColor,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
+                                    );
+                                  }
+
+                                  final models = snapshot.data!;
+                                  final downloadedModels = models['downloaded'] ?? [];
+                                  final availableModels = models['available'] ?? [];
+
+                                  return Column(
+                                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                                    children: [
+                                      if (downloadedModels.isNotEmpty) ...[
+                                        _buildSectionHeader(
+                                          'DOWNLOADED',
+                                          subtitleColor,
+                                        ),
+                                        const SizedBox(height: 8),
+                                        ...downloadedModels.map(
+                                          (model) => _buildModelCard(
+                                            model,
+                                            isDark: isDark,
+                                            subtitleColor: subtitleColor,
+                                            borderColor: borderColor,
+                                            selected: widget.currentModel == model.name,
+                                            enabled: true,
+                                            onTap: () {
+                                              widget.onSelectModel(model.name);
+                                              widget.onClose();
+                                            },
                                           ),
-                                          const SizedBox(width: 16),
-                                          Container(
-                                            width: 20,
-                                            height: 20,
-                                            decoration: const BoxDecoration(
-                                              shape: BoxShape.circle,
-                                              color: nothingRed,
-                                            ),
-                                            child: const Icon(
-                                              Icons.check,
-                                              size: 12,
-                                              color: Colors.white,
-                                            ),
+                                        ),
+                                        const SizedBox(height: 12),
+                                      ],
+                                      if (availableModels.isNotEmpty) ...[
+                                        _buildSectionHeader(
+                                          'AVAILABLE',
+                                          subtitleColor,
+                                        ),
+                                        const SizedBox(height: 8),
+                                        ...availableModels.map(
+                                          (model) => _buildModelCard(
+                                            model,
+                                            isDark: isDark,
+                                            subtitleColor: subtitleColor,
+                                            borderColor: borderColor,
+                                            selected: false,
+                                            enabled: false,
+                                            onTap: () {},
                                           ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    'No other placeholder models are configured yet.',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: subtitleColor,
-                                    ),
-                                  ),
-                                ],
+                                        ),
+                                      ],
+                                      if (downloadedModels.isEmpty &&
+                                          availableModels.isEmpty)
+                                        Text(
+                                          'No models available.',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: subtitleColor,
+                                          ),
+                                        ),
+                                    ],
+                                  );
+                                },
                               ),
                             ),
                           ),
@@ -200,6 +228,92 @@ class ModelSelectorOverlay extends StatelessWidget {
                   ),
                 ),
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSectionHeader(String title, Color subtitleColor) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      child: Text(
+        title,
+        style: TextStyle(
+          fontFamily: 'Courier',
+          fontSize: 11,
+          fontWeight: FontWeight.bold,
+          color: subtitleColor,
+          letterSpacing: 3,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildModelCard(
+    ModelCatalogEntry model, {
+    required bool isDark,
+    required Color subtitleColor,
+    required Color borderColor,
+    required bool selected,
+    required bool enabled,
+    required VoidCallback onTap,
+  }) {
+    final foregroundColor = isDark ? Colors.white : Colors.black;
+    final accentColor = selected ? nothingRed : borderColor;
+
+    return GestureDetector(
+      onTap: enabled ? onTap : null,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          border: Border.all(color: accentColor),
+          borderRadius: BorderRadius.circular(2),
+          color: selected
+              ? (isDark ? const Color(0xFF1C1A1A) : const Color(0xFFFFF7F7))
+              : null,
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    model.name.toUpperCase(),
+                    style: TextStyle(
+                      fontFamily: 'Courier',
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: selected ? nothingRed : foregroundColor,
+                      letterSpacing: 2,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    model.description,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: subtitleColor,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Container(
+              width: 20,
+              height: 20,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: selected ? nothingRed : Colors.transparent,
+                border: Border.all(color: selected ? nothingRed : accentColor),
+              ),
+              child: selected
+                  ? const Icon(Icons.check, size: 12, color: Colors.white)
+                  : null,
             ),
           ],
         ),

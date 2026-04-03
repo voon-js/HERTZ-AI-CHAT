@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'services/notification_service.dart';
 import 'theme/app_theme.dart';
 import 'pages/chat_page.dart';
 import 'pages/settings_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await NotificationService().initialize();
+  await NotificationService().requestPermissionIfNeeded();
   await SystemChrome.setEnabledSystemUIMode(
     SystemUiMode.manual,
     overlays: [SystemUiOverlay.top, SystemUiOverlay.bottom],
@@ -89,15 +92,35 @@ class _AppShellState extends State<AppShell> {
   Widget build(BuildContext context) {
     final isDesktop = MediaQuery.of(context).size.width > 600;
 
-    Widget content = _showSettings
-        ? SettingsPage(
-            isDark: widget.isDark,
-            onToggleTheme: widget.onToggleTheme,
-            onBack: () => setState(() => _showSettings = false),
-          )
-        : ChatPage(
+    final shellContent = Stack(
+      children: [
+        Positioned.fill(
+          child: ChatPage(
             onNavigateSettings: () => setState(() => _showSettings = true),
-          );
+          ),
+        ),
+        Positioned.fill(
+          child: IgnorePointer(
+            ignoring: !_showSettings,
+            child: AnimatedOpacity(
+              duration: const Duration(milliseconds: 280),
+              curve: Curves.easeOutCubic,
+              opacity: _showSettings ? 1.0 : 0.0,
+              child: AnimatedSlide(
+                duration: const Duration(milliseconds: 320),
+                curve: Curves.easeOutCubic,
+                offset: _showSettings ? Offset.zero : const Offset(0.08, 0),
+                child: SettingsPage(
+                  isDark: widget.isDark,
+                  onToggleTheme: widget.onToggleTheme,
+                  onBack: () => setState(() => _showSettings = false),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
 
     if (isDesktop) {
       return PopScope(
@@ -125,7 +148,7 @@ class _AppShellState extends State<AppShell> {
                 borderRadius: BorderRadius.circular(2),
               ),
               clipBehavior: Clip.hardEdge,
-              child: content,
+              child: shellContent,
             ),
           ),
         ),
@@ -140,7 +163,7 @@ class _AppShellState extends State<AppShell> {
           setState(() => _showSettings = false);
         }
       },
-      child: content,
+      child: shellContent,
     );
   }
 }

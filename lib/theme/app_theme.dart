@@ -2,6 +2,11 @@ import 'package:flutter/material.dart';
 
 const nothingRed = Color(0xFFFF0000);
 
+// Chat message colors
+const chatMessageRedDarkBg = Color(0xFF7F1D1D);
+const chatMessageRedDarkBorder = Color(0xFFB91C1C);
+const chatMessageRedLight = Color(0xFFEF4444);
+
 class AppTheme {
   static final light = ThemeData(
     brightness: Brightness.light,

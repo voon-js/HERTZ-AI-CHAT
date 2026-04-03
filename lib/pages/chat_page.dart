@@ -1,10 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/ai_service.dart';
 import '../services/chat_history_service.dart';
+import '../services/model_manager.dart';
+import '../services/model_catalog.dart';
 import '../theme/app_theme.dart';
 import '../widgets/chat_input_bar.dart';
 import '../widgets/file_upload_overlay.dart';
@@ -22,14 +25,15 @@ class ChatPage extends StatefulWidget {
 }
 
 class _ChatPageState extends State<ChatPage>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   bool _isSidebarOpen = false;
   bool _isFileUploadOpen = false;
   bool _isModelSelectorOpen = false;
-  String _currentModel = 'TinyLlama Q4';
+  String _currentModel = ModelCatalog.defaultModel.name;
 
   final AIService _ai = AIService();
   final ChatHistoryService _historyService = ChatHistoryService();
+  final ModelManager _modelManager = ModelManager();
   final List<ChatConversation> _conversations = [];
   List<ChatMessage> _messages = [];
   String? _activeConversationId;
@@ -38,18 +42,19 @@ class _ChatPageState extends State<ChatPage>
   bool _isGenerating = false;
   bool _showFirstLoadScreen = false;
   double? _firstLoadProgress;
-  String _firstLoadStatus = 'Preparing TinyLlama Q4...';
+  String _firstLoadStatus = 'Select a model to install.';
   String? _firstLoadErrorText;
   String? _errorText;
   late final AnimationController _pulseController;
+  late Future<Map<String, List<ModelCatalogEntry>>> _firstLoadModelsFuture;
+  final Set<String> _selectedFirstLoadModelIds = {};
   Timer? _historySaveTimer;
   bool _isHistorySaveInProgress = false;
   bool _isHistorySaveQueued = false;
+  bool _isFirstLoadInstalling = false;
 
-  static const String _modelName = 'tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf';
-  static const String _modelUrl =
-      'https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf';
-  static const String _firstLoadDoneKey = 'tinyllama_q4_first_load_done_v1';
+  static const String _firstLoadDoneKey = 'first_time_setup_done_v2';
+  static const String _activeModelIdKey = 'active_model_id_v2';
 
   @override
   void initState() {
@@ -58,7 +63,11 @@ class _ChatPageState extends State<ChatPage>
       vsync: this,
       duration: const Duration(milliseconds: 1150),
     )..repeat(reverse: true);
+    _firstLoadModelsFuture = _categorizeModels();
     unawaited(_bootstrap());
+  }
+
+  void _triggerBorderShine() {
   }
 
   @override
@@ -82,52 +91,53 @@ class _ChatPageState extends State<ChatPage>
     });
   }
 
+  Future<Map<String, List<ModelCatalogEntry>>> _categorizeModels() async {
+    final downloaded = <ModelCatalogEntry>[];
+    final available = <ModelCatalogEntry>[];
+
+    for (final model in ModelCatalog.models) {
+      final exists = await _modelManager.modelExists(model.filename);
+      if (exists) {
+        downloaded.add(model);
+      } else {
+        available.add(model);
+      }
+    }
+
+    return {
+      'downloaded': downloaded,
+      'available': available,
+    };
+  }
+
   Future<void> _bootstrap() async {
     final prefs = await SharedPreferences.getInstance();
     final firstLoadDone = prefs.getBool(_firstLoadDoneKey) ?? false;
+    final activeModelId = prefs.getString(_activeModelIdKey) ?? ModelCatalog.defaultModelId;
+    final activeModel = ModelCatalog.byId(activeModelId);
 
     if (!mounted) return;
-    setState(() {
-      _showFirstLoadScreen = !firstLoadDone;
-      _firstLoadProgress = null;
-      _firstLoadStatus = 'Preparing TinyLlama Q4...';
-      _firstLoadErrorText = null;
-    });
-
     unawaited(_loadHistory());
 
-    final initialized = await _initModel(isFirstLoad: !firstLoadDone);
-
-    if (!mounted) return;
-    if (!firstLoadDone && initialized) {
-      await prefs.setBool(_firstLoadDoneKey, true);
-    }
-
-    if (mounted) {
+    if (!firstLoadDone) {
+      if (!mounted) return;
       setState(() {
-        // Keep overlay visible on first-load failure so error stays on same screen.
-        _showFirstLoadScreen = !firstLoadDone && !initialized;
+        _showFirstLoadScreen = true;
+        _firstLoadProgress = null;
+        _firstLoadStatus = 'Select a model to install.';
+        _firstLoadErrorText = null;
+        _firstLoadModelsFuture = _categorizeModels();
       });
-    }
-  }
-
-  Future<void> _retryFirstLoad() async {
-    final prefs = await SharedPreferences.getInstance();
-
-    if (!mounted) return;
-    setState(() {
-      _firstLoadErrorText = null;
-      _firstLoadProgress = null;
-      _firstLoadStatus = 'Retrying TinyLlama Q4 setup...';
-    });
-
-    final initialized = await _initModel(isFirstLoad: true);
-    if (!mounted) return;
-
-    if (initialized) {
-      await prefs.setBool(_firstLoadDoneKey, true);
+      return;
     }
 
+    if (!mounted) return;
+    final initialized = await _initModel(
+      model: activeModel,
+      isFirstLoad: false,
+    );
+
+    if (!mounted) return;
     if (mounted) {
       setState(() {
         _showFirstLoadScreen = !initialized;
@@ -191,6 +201,7 @@ class _ChatPageState extends State<ChatPage>
       _activeConversationId = null;
       _messages = [];
       _errorText = null;
+      _triggerBorderShine();
     });
   }
 
@@ -210,6 +221,7 @@ class _ChatPageState extends State<ChatPage>
         _activeConversationId = null;
         _messages = [];
         _errorText = null;
+        _triggerBorderShine();
       }
     });
   }
@@ -278,12 +290,15 @@ class _ChatPageState extends State<ChatPage>
     }
   }
 
-  Future<bool> _initModel({required bool isFirstLoad}) async {
+  Future<bool> _initModel({
+    required ModelCatalogEntry model,
+    required bool isFirstLoad,
+  }) async {
     setState(() {
       _isInitializing = true;
       _errorText = null;
       if (isFirstLoad) {
-        _firstLoadStatus = 'Preparing TinyLlama Q4...';
+        _firstLoadStatus = 'Preparing ${model.name}...';
         _firstLoadProgress = null;
         _firstLoadErrorText = null;
       }
@@ -291,8 +306,8 @@ class _ChatPageState extends State<ChatPage>
 
     try {
       await _ai.initialize(
-        modelName: _modelName,
-        modelUrl: _modelUrl,
+        modelName: model.filename,
+        modelUrl: model.url,
         onProgress: isFirstLoad
             ? (received, total) {
                 if (!mounted) return;
@@ -305,8 +320,8 @@ class _ChatPageState extends State<ChatPage>
                 setState(() {
                   _firstLoadProgress = value;
                   _firstLoadStatus = percent == null
-                      ? 'Downloading TinyLlama Q4...'
-                      : 'Downloading TinyLlama Q4... $percent%';
+                      ? 'Downloading ${model.name}...'
+                      : 'Downloading ${model.name}... $percent%';
                   _firstLoadErrorText = null;
                 });
               }
@@ -315,6 +330,8 @@ class _ChatPageState extends State<ChatPage>
       if (!mounted) return false;
       setState(() {
         _isInitializing = false;
+        _currentModel = model.name;
+        _triggerBorderShine();
       });
       return true;
     } catch (e) {
@@ -322,14 +339,186 @@ class _ChatPageState extends State<ChatPage>
       setState(() {
         _isInitializing = false;
         _errorText = 'Init failed: $e';
+        _triggerBorderShine();
         if (isFirstLoad) {
           _firstLoadErrorText =
-              'Failed to load TinyLlama Q4. Please check your internet connection and try again.';
+              'Failed to load ${model.name}. Please check your internet connection and try again.';
           _firstLoadStatus = 'Setup failed.';
         }
       });
       return false;
     }
+  }
+
+  Future<void> _installSelectedModels(List<ModelCatalogEntry> selectedModels) async {
+    if (selectedModels.isEmpty || _isFirstLoadInstalling) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+
+    // Clear any previous cancellation state
+    _modelManager.clearCancellationState();
+
+    setState(() {
+      _isFirstLoadInstalling = true;
+      _firstLoadErrorText = null;
+      _firstLoadProgress = null;
+      _firstLoadStatus = 'Preparing selected model(s)...';
+    });
+
+    try {
+      for (final model in selectedModels) {
+        final exists = await _modelManager.modelExists(model.filename);
+        if (exists) {
+          if (!mounted) return;
+          setState(() {
+            _firstLoadStatus = '${model.name} is ready.';
+          });
+          continue;
+        }
+
+        if (!mounted) return;
+        setState(() {
+          _firstLoadProgress = null;
+          _firstLoadStatus = 'Downloading ${model.name}...';
+        });
+
+        await _modelManager.downloadModel(
+          model.filename,
+          model.url,
+          onProgress: (received, total) {
+            if (!mounted) return;
+            final hasTotal = total > 0;
+            final value = hasTotal ? (received / total).clamp(0.0, 1.0) : null;
+            final percent = hasTotal ? ((value! * 100).round()) : null;
+
+            setState(() {
+              _firstLoadProgress = value;
+              _firstLoadStatus = percent == null
+                  ? 'Downloading ${model.name}...'
+                  : 'Downloading ${model.name}... $percent%';
+            });
+          },
+        );
+      }
+
+      final primaryModel = selectedModels.first;
+      await prefs.setString(_activeModelIdKey, primaryModel.id);
+      final initialized = await _initModel(
+        model: primaryModel,
+        isFirstLoad: true,
+      );
+
+      if (!initialized) {
+        throw Exception('Initialization failed');
+      }
+
+      await prefs.setBool(_firstLoadDoneKey, true);
+      if (!mounted) return;
+
+      setState(() {
+        _showFirstLoadScreen = false;
+        _firstLoadProgress = null;
+        _firstLoadErrorText = null;
+      });
+
+      _firstLoadModelsFuture = _categorizeModels();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isInitializing = false;
+        _isFirstLoadInstalling = false;
+        _firstLoadProgress = null;
+        _firstLoadStatus = 'Setup failed.';
+        _firstLoadErrorText =
+            'Failed to install the selected model(s). Please try again.';
+        _triggerBorderShine();
+        _firstLoadModelsFuture = _categorizeModels();
+      });
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _isFirstLoadInstalling = false;
+    });
+  }
+
+  Future<void> _cancelFirstLoadSetup() async {
+    if (!_isFirstLoadInstalling) return;
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark ? Colors.black : Colors.white;
+    final subtitleColor =
+        isDark ? const Color(0xFFA1A1AA) : const Color(0xFF4B5563);
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: bg,
+        title: const Text(
+          'CANCEL DOWNLOAD?',
+          style: TextStyle(
+            fontFamily: 'Courier',
+            letterSpacing: 2,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: Text(
+          'This will stop all downloads and delete any partially downloaded files.',
+          style: TextStyle(
+            fontFamily: 'Courier',
+            color: subtitleColor,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text(
+              'KEEP GOING',
+              style: TextStyle(
+                fontFamily: 'Courier',
+                color: Colors.grey,
+                letterSpacing: 1.5,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _performCancel();
+            },
+            child: const Text(
+              'YES',
+              style: TextStyle(
+                fontFamily: 'Courier',
+                color: nothingRed,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.5,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _performCancel() async {
+    // Cancel all downloads
+    await _modelManager.cancelAllDownloads();
+
+    if (!mounted) return;
+
+    setState(() {
+      _isFirstLoadInstalling = false;
+      _firstLoadProgress = null;
+      _firstLoadStatus = 'Select a model to install.';
+      _firstLoadErrorText = null;
+      _firstLoadModelsFuture = _categorizeModels();
+    });
+
+    // Clear cancellation state for next attempt
+    _modelManager.clearCancellationState();
   }
 
   Future<void> _sendPrompt(String prompt) async {
@@ -354,6 +543,7 @@ class _ChatPageState extends State<ChatPage>
       ];
       _isGenerating = true;
       _errorText = null;
+      _triggerBorderShine();
     });
     _scrollChatToBottom();
     _scheduleHistorySave();
@@ -376,6 +566,7 @@ class _ChatPageState extends State<ChatPage>
       if (!mounted) return;
       setState(() {
         _errorText = 'Generation failed: $e';
+        _triggerBorderShine();
       });
     } finally {
       if (mounted) {
@@ -505,8 +696,9 @@ class _ChatPageState extends State<ChatPage>
                                       ),
                                     ),
                                     child: Text(
-                                      _errorText ??
-                                          (_isInitializing
+                                      _errorText != null
+                                          ? 'An error occurred. Please try again.'
+                                          : (_isInitializing
                                               ? 'DOWNLOADING / INITIALIZING MODEL...'
                                               : 'TYPE A MESSAGE AND PRESS SEND.'),
                                       textAlign: TextAlign.center,
@@ -610,10 +802,37 @@ class _ChatPageState extends State<ChatPage>
                 });
               },
             ),
-            if (_showFirstLoadScreen)
-              Positioned.fill(
-                child: _buildFirstLoadScreen(isDark),
+            Positioned.fill(
+              child: IgnorePointer(
+                ignoring: !_showFirstLoadScreen,
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 360),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  transitionBuilder: (child, animation) {
+                    final slide = Tween<Offset>(
+                      begin: const Offset(0, 0.02),
+                      end: Offset.zero,
+                    ).animate(animation);
+                    return FadeTransition(
+                      opacity: animation,
+                      child: SlideTransition(
+                        position: slide,
+                        child: child,
+                      ),
+                    );
+                  },
+                  child: _showFirstLoadScreen
+                      ? KeyedSubtree(
+                          key: const ValueKey('first-load-screen'),
+                          child: _buildFirstLoadScreen(isDark),
+                        )
+                      : const SizedBox.expand(
+                          key: ValueKey('first-load-hidden'),
+                        ),
+                ),
               ),
+            ),
             ],
           ),
         ),
@@ -627,110 +846,333 @@ class _ChatPageState extends State<ChatPage>
     final subtitleColor =
         isDark ? const Color(0xFFA1A1AA) : const Color(0xFF4B5563);
     final borderColor = isDark ? const Color(0xFF3F3F46) : Colors.black;
-    final trackColor =
-        isDark ? const Color(0xFF27272A) : const Color(0xFFE5E7EB);
 
     return ColoredBox(
       color: bg,
       child: Center(
         child: Container(
-          width: 320,
+          width: 420,
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.82,
+          ),
           padding: const EdgeInsets.all(18),
           decoration: BoxDecoration(
             border: Border.all(color: borderColor),
             borderRadius: BorderRadius.circular(2),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'FIRST TIME SETUP',
-                style: TextStyle(
-                  fontFamily: 'Courier',
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  color: textColor,
-                  letterSpacing: 2,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Loading TinyLlama Q4 model',
-                style: TextStyle(
-                  fontFamily: 'Courier',
-                  fontSize: 12,
-                  color: subtitleColor,
-                ),
-              ),
-              const SizedBox(height: 14),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(2),
-                child: LinearProgressIndicator(
-                  value: _firstLoadProgress,
-                  minHeight: 8,
-                  backgroundColor: trackColor,
-                  valueColor: const AlwaysStoppedAnimation<Color>(nothingRed),
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                _firstLoadStatus,
-                style: TextStyle(
-                  fontFamily: 'Courier',
-                  fontSize: 11,
-                  color: subtitleColor,
-                ),
-              ),
-              if (_firstLoadErrorText != null) ...[
-                const SizedBox(height: 12),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: isDark
-                        ? const Color(0xFF2A1215)
-                        : const Color(0xFFFFE4E6),
-                    border: Border.all(color: const Color(0xFFEF4444)),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                  child: Text(
-                    _firstLoadErrorText!,
+          child: FutureBuilder<Map<String, List<ModelCatalogEntry>>>(
+            future: _firstLoadModelsFuture,
+            builder: (context, snapshot) {
+              final downloadedModels = snapshot.data?['downloaded'] ?? [];
+              final availableModels = snapshot.data?['available'] ?? [];
+              final selectedModels = [
+                ...downloadedModels,
+                ...availableModels,
+              ].where((model) => _selectedFirstLoadModelIds.contains(model.id)).toList();
+
+              final selectedCount = selectedModels.length;
+              final canInstall = selectedCount > 0 && !_isFirstLoadInstalling;
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'FIRST TIME SETUP',
                     style: TextStyle(
                       fontFamily: 'Courier',
-                      fontSize: 11,
-                      color: isDark
-                          ? const Color(0xFFFCA5A5)
-                          : const Color(0xFFB91C1C),
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: textColor,
+                      letterSpacing: 2,
                     ),
                   ),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _isInitializing ? null : _retryFirstLoad,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: nothingRed,
-                      foregroundColor: Colors.white,
-                      disabledBackgroundColor: nothingRed.withValues(alpha: 0.4),
-                      shape: RoundedRectangleBorder(
+                  const SizedBox(height: 8),
+                  Text(
+                    'Select one or more models to install. Installed models are ready to use immediately.',
+                    style: TextStyle(
+                      fontFamily: 'Courier',
+                      fontSize: 12,
+                      color: subtitleColor,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  if (_firstLoadErrorText != null) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? const Color(0xFF2A1215)
+                            : const Color(0xFFFFE4E6),
+                        border: Border.all(color: const Color(0xFFEF4444)),
                         borderRadius: BorderRadius.circular(2),
                       ),
+                      child: Text(
+                        _firstLoadErrorText!,
+                        style: TextStyle(
+                          fontFamily: 'Courier',
+                          fontSize: 11,
+                          color: isDark
+                              ? const Color(0xFFFCA5A5)
+                              : const Color(0xFFB91C1C),
+                        ),
+                      ),
                     ),
-                    child: const Text(
-                      'RETRY',
+                    const SizedBox(height: 12),
+                  ],
+                  if (_isFirstLoadInstalling) ...[
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(2),
+                      child: LinearProgressIndicator(
+                        value: _firstLoadProgress,
+                        minHeight: 8,
+                        backgroundColor: isDark
+                            ? const Color(0xFF27272A)
+                            : const Color(0xFFE5E7EB),
+                        valueColor:
+                            const AlwaysStoppedAnimation<Color>(nothingRed),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      _firstLoadStatus,
                       style: TextStyle(
                         fontFamily: 'Courier',
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 2,
+                        fontSize: 11,
+                        color: subtitleColor,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  if (!snapshot.hasData)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 24),
+                      child: Center(
+                        child: CircularProgressIndicator(
+                          color: isDark ? Colors.white : Colors.black,
+                        ),
+                      ),
+                    )
+                  else ...[
+                    if (downloadedModels.isNotEmpty) ...[
+                      _buildSetupSectionHeader('DOWNLOADED', subtitleColor),
+                      const SizedBox(height: 8),
+                      ...downloadedModels.map(
+                        (model) => _buildSetupModelCard(
+                          model,
+                          isDark: isDark,
+                          subtitleColor: subtitleColor,
+                          borderColor: borderColor,
+                          selected: _selectedFirstLoadModelIds.contains(model.id),
+                          enabled: !_isFirstLoadInstalling,
+                          onTap: () {
+                            setState(() {
+                              if (_selectedFirstLoadModelIds.contains(model.id)) {
+                                _selectedFirstLoadModelIds.remove(model.id);
+                              } else {
+                                _selectedFirstLoadModelIds.add(model.id);
+                              }
+                              _triggerBorderShine();
+                            });
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (availableModels.isNotEmpty) ...[
+                      _buildSetupSectionHeader('AVAILABLE', subtitleColor),
+                      const SizedBox(height: 8),
+                      ...availableModels.map(
+                        (model) => _buildSetupModelCard(
+                          model,
+                          isDark: isDark,
+                          subtitleColor: subtitleColor,
+                          borderColor: borderColor,
+                          selected: _selectedFirstLoadModelIds.contains(model.id),
+                          enabled: !_isFirstLoadInstalling,
+                          onTap: () {
+                            setState(() {
+                              if (_selectedFirstLoadModelIds.contains(model.id)) {
+                                _selectedFirstLoadModelIds.remove(model.id);
+                              } else {
+                                _selectedFirstLoadModelIds.add(model.id);
+                              }
+                              _triggerBorderShine();
+                            });
+                          },
+                        ),
+                      ),
+                    ],
+                    if (downloadedModels.isEmpty && availableModels.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 18),
+                        child: Text(
+                          'No models are configured yet.',
+                          style: TextStyle(
+                            fontFamily: 'Courier',
+                            fontSize: 12,
+                            color: subtitleColor,
+                          ),
+                        ),
+                      ),
+                  ],
+                  const SizedBox(height: 14),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      selectedCount == 1
+                          ? '1 model will be installed'
+                          : '$selectedCount models will be installed',
+                      style: TextStyle(
+                        fontFamily: 'Courier',
+                        fontSize: 11,
+                        color: subtitleColor,
                       ),
                     ),
                   ),
-                ),
-              ],
-            ],
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: canInstall
+                          ? () {
+                              unawaited(_installSelectedModels(selectedModels));
+                            }
+                          : null,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: nothingRed,
+                        foregroundColor: Colors.white,
+                        disabledBackgroundColor: nothingRed.withValues(alpha: 0.4),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                      child: Text(
+                        _isFirstLoadInstalling
+                            ? 'INSTALLING...'
+                            : 'INSTALL SELECTED',
+                        style: const TextStyle(
+                          fontFamily: 'Courier',
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 2,
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (_isFirstLoadInstalling) ...[
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton(
+                        onPressed: _cancelFirstLoadSetup,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: nothingRed,
+                          side: const BorderSide(color: nothingRed),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                        child: const Text(
+                          'CANCEL',
+                          style: TextStyle(
+                            fontFamily: 'Courier',
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 2,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              );
+            },
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSetupSectionHeader(String title, Color subtitleColor) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Text(
+        title,
+        style: TextStyle(
+          fontFamily: 'Courier',
+          fontSize: 11,
+          fontWeight: FontWeight.bold,
+          color: subtitleColor,
+          letterSpacing: 3,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSetupModelCard(
+    ModelCatalogEntry model, {
+    required bool isDark,
+    required Color subtitleColor,
+    required Color borderColor,
+    required bool selected,
+    required bool enabled,
+    required VoidCallback onTap,
+  }) {
+    final foregroundColor = isDark ? Colors.white : Colors.black;
+    final accentColor = selected ? nothingRed : borderColor;
+
+    return GestureDetector(
+      onTap: enabled ? onTap : null,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          border: Border.all(color: accentColor),
+          borderRadius: BorderRadius.circular(2),
+          color: selected
+              ? (isDark ? const Color(0xFF1C1A1A) : const Color(0xFFFFF7F7))
+              : null,
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    model.name.toUpperCase(),
+                    style: TextStyle(
+                      fontFamily: 'Courier',
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: selected ? nothingRed : foregroundColor,
+                      letterSpacing: 2,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    model.description,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: subtitleColor,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Container(
+              width: 20,
+              height: 20,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: selected ? nothingRed : Colors.transparent,
+                border: Border.all(color: selected ? nothingRed : accentColor),
+              ),
+              child: selected
+                  ? const Icon(Icons.check, size: 12, color: Colors.white)
+                  : null,
+            ),
+          ],
         ),
       ),
     );
@@ -815,29 +1257,48 @@ class _ChatPageState extends State<ChatPage>
 
     return Align(
       alignment: align,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        constraints: const BoxConstraints(maxWidth: 330),
-        decoration: BoxDecoration(
-          color: bgColor,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-            color: message.isUser
-                ? userBubbleBorder
-                : (isDark ? const Color(0xFF3F3F46) : const Color(0xFFD1D5DB)),
+      child: GestureDetector(
+        onLongPress: message.text.trim().isEmpty
+            ? null
+            : () => _copyMessageToClipboard(message.text),
+        child: Container(
+          margin: const EdgeInsets.symmetric(vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          constraints: const BoxConstraints(maxWidth: 330),
+          decoration: BoxDecoration(
+            color: bgColor,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: message.isUser
+                  ? userBubbleBorder
+                  : (isDark ? const Color(0xFF3F3F46) : const Color(0xFFD1D5DB)),
+            ),
           ),
-        ),
-        child: Text(
-          message.text.isEmpty ? '...' : message.text,
-          style: TextStyle(
-            fontFamily: 'Courier',
-            fontSize: 13,
-            color: textColor,
+          child: Text(
+            message.text.isEmpty ? '...' : message.text,
+            style: TextStyle(
+              fontFamily: 'Courier',
+              fontSize: 13,
+              color: textColor,
+            ),
           ),
         ),
       ),
     );
+  }
+
+  Future<void> _copyMessageToClipboard(String text) async {
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text('Message copied'),
+          duration: Duration(milliseconds: 1200),
+        ),
+      );
   }
 
   Widget _buildErrorBubble(bool isDark, String text) {

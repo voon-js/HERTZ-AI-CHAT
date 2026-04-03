@@ -55,43 +55,56 @@ class AIService {
     print('[AIService]   Model: $modelName');
     print('[AIService]   Threads: $nThreads');
 
-    try {
-      final modelExists = await _modelManager.modelExists(modelName);
-      if (!modelExists) {
-        print('[AIService] Model not found locally. Starting download...');
-        print('[AIService] Source: $modelUrl');
+    var attemptedRecovery = false;
 
-        await _modelManager.downloadModel(
-          modelName,
-          modelUrl,
-          onProgress: onProgress,
-        );
+    while (true) {
+      try {
+        final modelExists = await _modelManager.modelExists(modelName);
+        if (!modelExists) {
+          print('[AIService] Model not found locally. Starting download...');
+          print('[AIService] Source: $modelUrl');
+
+          await _modelManager.downloadModel(
+            modelName,
+            modelUrl,
+            onProgress: onProgress,
+          );
+        }
+
+        final modelPath = await _modelManager.getModelPath(modelName);
+        print('[AIService] Model path: $modelPath');
+
+        await _ensureWorkerStarted();
+
+        final initId = _nextRequestId();
+        final initCompleter = Completer<void>();
+        _initCompleters[initId] = initCompleter;
+
+        _workerCommandPort!.send({
+          'type': 'init',
+          'id': initId,
+          'modelPath': modelPath,
+          'nThreads': nThreads,
+        });
+
+        await initCompleter.future;
+        _isModelInitialized = true;
+        print('[AIService] ✓ Initialization complete');
+        return;
+      } catch (e) {
+        print('[AIService] ✗ Initialization failed: $e');
+        _isModelInitialized = false;
+        await _stopWorker();
+
+        if (!attemptedRecovery) {
+          attemptedRecovery = true;
+          print('[AIService] Attempting recovery by deleting local model and re-downloading...');
+          await _modelManager.deleteModel(modelName);
+          continue;
+        }
+
+        rethrow;
       }
-
-      final modelPath = await _modelManager.getModelPath(modelName);
-      print('[AIService] Model path: $modelPath');
-
-      await _ensureWorkerStarted();
-
-      final initId = _nextRequestId();
-      final initCompleter = Completer<void>();
-      _initCompleters[initId] = initCompleter;
-
-      _workerCommandPort!.send({
-        'type': 'init',
-        'id': initId,
-        'modelPath': modelPath,
-        'nThreads': nThreads,
-      });
-
-      await initCompleter.future;
-      _isModelInitialized = true;
-      print('[AIService] ✓ Initialization complete');
-    } catch (e) {
-      print('[AIService] ✗ Initialization failed: $e');
-      _isModelInitialized = false;
-      await _stopWorker();
-      rethrow;
     }
   }
 

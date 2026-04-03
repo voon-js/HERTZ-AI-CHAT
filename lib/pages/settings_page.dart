@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import 'about_page.dart';
+import 'notification_settings_page.dart';
 import 'privacy_security_page.dart';
 
 class SettingsPage extends StatelessWidget {
@@ -150,6 +151,13 @@ class SettingsPage extends StatelessWidget {
                           hoverBg: hoverBg,
                           borderColor: borderColor,
                           showDivider: true,
+                          onTap: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => NotificationSettingsPage(isDark: isDark),
+                              ),
+                            );
+                          },
                         ),
                         _SettingsRow(
                           icon: Icons.shield_outlined,

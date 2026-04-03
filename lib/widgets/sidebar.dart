@@ -118,6 +118,7 @@ class _SidebarWidgetState extends State<SidebarWidget> {
     final dottedLine = isDark ? const Color(0xFF3F3F46) : const Color(0xFFD1D5DB);
     final inputBorder = isDark ? const Color(0xFF3F3F46) : Colors.black;
     final selectedSurface = isDark ? const Color(0xFF18181B) : const Color(0xFFF3F4F6);
+    final accentRed = isDark ? chatMessageRedDarkBorder : nothingRed;
 
     return Stack(
       children: [
@@ -179,9 +180,9 @@ class _SidebarWidgetState extends State<SidebarWidget> {
                             ),
                           ),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: nothingRed,
+                            backgroundColor: accentRed,
                             foregroundColor: Colors.white,
-                            disabledBackgroundColor: nothingRed.withValues(alpha: 0.45),
+                            disabledBackgroundColor: accentRed.withValues(alpha: 0.45),
                             disabledForegroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
@@ -221,7 +222,7 @@ class _SidebarWidgetState extends State<SidebarWidget> {
                             borderRadius: BorderRadius.circular(2),
                           ),
                           focusedBorder: OutlineInputBorder(
-                            borderSide: const BorderSide(color: nothingRed),
+                            borderSide: BorderSide(color: accentRed),
                             borderRadius: BorderRadius.circular(2),
                           ),
                           filled: true,
@@ -380,11 +381,11 @@ class _SidebarWidgetState extends State<SidebarWidget> {
                                                                       Navigator.pop(context);
                                                                       widget.onDeleteConversation(conversation.id);
                                                                     },
-                                                                    child: const Text(
+                                                                    child: Text(
                                                                       'DELETE',
                                                                       style: TextStyle(
                                                                         fontFamily: 'Courier',
-                                                                        color: nothingRed,
+                                                                        color: accentRed,
                                                                         fontWeight: FontWeight.bold,
                                                                         letterSpacing: 1.5,
                                                                       ),
@@ -406,7 +407,7 @@ class _SidebarWidgetState extends State<SidebarWidget> {
                                                             : Colors.transparent,
                                                         border: Border.all(
                                                           color: selected
-                                                              ? nothingRed
+                                                              ? accentRed
                                                               : Colors.transparent,
                                                         ),
                                                         borderRadius: BorderRadius.circular(2),
@@ -423,12 +424,12 @@ class _SidebarWidgetState extends State<SidebarWidget> {
                                                               shape: BoxShape.circle,
                                                               border: Border.all(
                                                                 color: selected
-                                                                    ? nothingRed
+                                                                    ? accentRed
                                                                     : subtitleColor,
                                                                 width: 1,
                                                               ),
                                                               color: selected
-                                                                  ? nothingRed
+                                                                  ? accentRed
                                                                   : Colors.transparent,
                                                             ),
                                                             child: selected
@@ -454,7 +455,7 @@ class _SidebarWidgetState extends State<SidebarWidget> {
                                                                     fontSize: 12,
                                                                     fontWeight: FontWeight.bold,
                                                                     color: selected
-                                                                        ? nothingRed
+                                                                        ? accentRed
                                                                         : chatTextColor,
                                                                     letterSpacing: 1.5,
                                                                   ),
