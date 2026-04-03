@@ -226,6 +226,47 @@ class _ChatPageState extends State<ChatPage>
     });
   }
 
+  Future<void> _persistActiveModelByName(String modelName) async {
+    final selectedModel = ModelCatalog.models.firstWhere(
+      (model) => model.name == modelName,
+      orElse: () => ModelCatalog.defaultModel,
+    );
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_activeModelIdKey, selectedModel.id);
+  }
+
+  Future<void> _switchModelByName(String modelName) async {
+    if (_isGenerating) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Stop generation before switching models.'),
+        ),
+      );
+      return;
+    }
+
+    final selectedModel = ModelCatalog.models.firstWhere(
+      (model) => model.name == modelName,
+      orElse: () => ModelCatalog.defaultModel,
+    );
+
+    final initialized = await _initModel(
+      model: selectedModel,
+      isFirstLoad: false,
+    );
+
+    if (!initialized || !mounted) return;
+
+    await _persistActiveModelByName(modelName);
+    if (!mounted) return;
+
+    setState(() {
+      _isModelSelectorOpen = false;
+    });
+  }
+
   void _closeSidebar() {
     FocusManager.instance.primaryFocus?.unfocus();
     if (!_isSidebarOpen) return;
@@ -475,7 +516,7 @@ class _ChatPageState extends State<ChatPage>
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text(
-              'KEEP GOING',
+              'NO',
               style: TextStyle(
                 fontFamily: 'Courier',
                 color: Colors.grey,
@@ -796,10 +837,7 @@ class _ChatPageState extends State<ChatPage>
               onClose: () => setState(() => _isModelSelectorOpen = false),
               currentModel: _currentModel,
               onSelectModel: (model) {
-                setState(() {
-                  _currentModel = model;
-                  _isModelSelectorOpen = false;
-                });
+                unawaited(_switchModelByName(model));
               },
             ),
             Positioned.fill(
@@ -863,12 +901,10 @@ class _ChatPageState extends State<ChatPage>
           child: FutureBuilder<Map<String, List<ModelCatalogEntry>>>(
             future: _firstLoadModelsFuture,
             builder: (context, snapshot) {
-              final downloadedModels = snapshot.data?['downloaded'] ?? [];
               final availableModels = snapshot.data?['available'] ?? [];
-              final selectedModels = [
-                ...downloadedModels,
-                ...availableModels,
-              ].where((model) => _selectedFirstLoadModelIds.contains(model.id)).toList();
+              final selectedModels = availableModels
+                  .where((model) => _selectedFirstLoadModelIds.contains(model.id))
+                  .toList();
 
               final selectedCount = selectedModels.length;
               final canInstall = selectedCount > 0 && !_isFirstLoadInstalling;
@@ -954,31 +990,6 @@ class _ChatPageState extends State<ChatPage>
                       ),
                     )
                   else ...[
-                    if (downloadedModels.isNotEmpty) ...[
-                      _buildSetupSectionHeader('DOWNLOADED', subtitleColor),
-                      const SizedBox(height: 8),
-                      ...downloadedModels.map(
-                        (model) => _buildSetupModelCard(
-                          model,
-                          isDark: isDark,
-                          subtitleColor: subtitleColor,
-                          borderColor: borderColor,
-                          selected: _selectedFirstLoadModelIds.contains(model.id),
-                          enabled: !_isFirstLoadInstalling,
-                          onTap: () {
-                            setState(() {
-                              if (_selectedFirstLoadModelIds.contains(model.id)) {
-                                _selectedFirstLoadModelIds.remove(model.id);
-                              } else {
-                                _selectedFirstLoadModelIds.add(model.id);
-                              }
-                              _triggerBorderShine();
-                            });
-                          },
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                    ],
                     if (availableModels.isNotEmpty) ...[
                       _buildSetupSectionHeader('AVAILABLE', subtitleColor),
                       const SizedBox(height: 8),
@@ -1003,7 +1014,7 @@ class _ChatPageState extends State<ChatPage>
                         ),
                       ),
                     ],
-                    if (downloadedModels.isEmpty && availableModels.isEmpty)
+                    if (availableModels.isEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 18),
                         child: Text(

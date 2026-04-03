@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'notification_service.dart';
 
@@ -14,6 +15,7 @@ class ModelManager {
 
   final NotificationService _notificationService = NotificationService();
   bool _shouldCancelDownloads = false;
+  int _activeDownloadCount = 0;
 
   /// Check if model exists and is readable
   /// 
@@ -88,6 +90,8 @@ class ModelManager {
     print('[ModelManager] Starting download from: $url');
 
     try {
+      await _beginDownloadSession();
+
       final request = http.Request('GET', Uri.parse(url));
       final response = await request.send();
 
@@ -172,6 +176,24 @@ class ModelManager {
         await _notificationService.showDownloadFailed(modelName);
       }
       rethrow;
+    } finally {
+      await _endDownloadSession();
+    }
+  }
+
+  Future<void> _beginDownloadSession() async {
+    _activeDownloadCount++;
+    if (_activeDownloadCount == 1) {
+      await WakelockPlus.enable();
+    }
+  }
+
+  Future<void> _endDownloadSession() async {
+    if (_activeDownloadCount > 0) {
+      _activeDownloadCount--;
+    }
+    if (_activeDownloadCount == 0) {
+      await WakelockPlus.disable();
     }
   }
 

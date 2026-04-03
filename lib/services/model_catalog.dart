@@ -26,6 +26,15 @@ class ModelCatalog {
           'https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf',
       description: 'Fast, lightweight on-device model (1.1B parameters)',
     ),
+    ModelCatalogEntry(
+      id: 'qwen2_5_3b_instruct_q4',
+      name: 'Qwen2.5 3B Instruct Q4',
+      filename: 'Qwen2.5-3B-Instruct-Q4_K_M.gguf',
+      url:
+          'https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf',
+      description:
+          'Stronger general chat model with a good size-to-quality balance (3B parameters)',
+    ),
   ];
 
   static ModelCatalogEntry get defaultModel => models.firstWhere(

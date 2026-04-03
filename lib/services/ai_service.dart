@@ -25,6 +25,7 @@ class AIService {
   StreamSubscription<dynamic>? _workerSubscription;
 
   bool _isModelInitialized = false;
+  String? _initializedModelName;
   bool _isGeneratingInWorker = false;
   int _requestId = 0;
 
@@ -47,8 +48,13 @@ class AIService {
     void Function(int received, int total)? onProgress,
   }) async {
     if (isInitialized) {
-      print('[AIService] ✓ Already initialized');
-      return;
+      if (_initializedModelName == modelName) {
+        print('[AIService] ✓ Already initialized with requested model');
+        return;
+      }
+
+      print('[AIService] Switching model: $_initializedModelName -> $modelName');
+      await _stopWorker();
     }
 
     print('[AIService] Initializing AI service...');
@@ -89,11 +95,13 @@ class AIService {
 
         await initCompleter.future;
         _isModelInitialized = true;
+        _initializedModelName = modelName;
         print('[AIService] ✓ Initialization complete');
         return;
       } catch (e) {
         print('[AIService] ✗ Initialization failed: $e');
         _isModelInitialized = false;
+        _initializedModelName = null;
         await _stopWorker();
 
         if (!attemptedRecovery) {
@@ -276,6 +284,7 @@ class AIService {
     _workerIsolate = null;
     _workerCommandPort = null;
     _isModelInitialized = false;
+    _initializedModelName = null;
     _isGeneratingInWorker = false;
   }
 

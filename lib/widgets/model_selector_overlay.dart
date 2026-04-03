@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../services/model_catalog.dart';
@@ -25,6 +27,8 @@ class ModelSelectorOverlay extends StatefulWidget {
 class _ModelSelectorOverlayState extends State<ModelSelectorOverlay> {
   final ModelManager _modelManager = ModelManager();
   late Future<Map<String, List<ModelCatalogEntry>>> _modelsFuture;
+  final Set<String> _downloadingModelIds = {};
+  final Map<String, double?> _downloadProgress = {};
 
   @override
   void initState() {
@@ -59,6 +63,113 @@ class _ModelSelectorOverlayState extends State<ModelSelectorOverlay> {
       'downloaded': downloaded,
       'available': available,
     };
+  }
+
+  Future<void> _confirmAndDownloadModel(
+    ModelCatalogEntry model,
+    bool isDark,
+    Color subtitleColor,
+    Color bg,
+  ) async {
+    if (_downloadingModelIds.contains(model.id)) return;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: bg,
+        title: const Text(
+          'DOWNLOAD MODEL?',
+          style: TextStyle(
+            fontFamily: 'Courier',
+            letterSpacing: 2,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: Text(
+          'Do you want to download ${model.name}?',
+          style: TextStyle(
+            fontFamily: 'Courier',
+            color: subtitleColor,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text(
+              'NO',
+              style: TextStyle(
+                fontFamily: 'Courier',
+                color: Colors.grey,
+                letterSpacing: 1.5,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              unawaited(_startModelDownload(model));
+            },
+            child: const Text(
+              'YES',
+              style: TextStyle(
+                fontFamily: 'Courier',
+                color: nothingRed,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.5,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _startModelDownload(ModelCatalogEntry model) async {
+    if (_downloadingModelIds.contains(model.id)) return;
+
+    if (!mounted) return;
+    setState(() {
+      _downloadingModelIds.add(model.id);
+      _downloadProgress[model.id] = null;
+    });
+
+    try {
+      await _modelManager.downloadModel(
+        model.filename,
+        model.url,
+        onProgress: (received, total) {
+          if (!mounted) return;
+          final hasTotal = total > 0;
+          final value = hasTotal ? (received / total).clamp(0.0, 1.0) : null;
+          final percent = hasTotal ? ((value! * 100).round()) : null;
+
+          setState(() {
+            _downloadProgress[model.id] = value;
+          });
+        },
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _downloadingModelIds.remove(model.id);
+        _downloadProgress.remove(model.id);
+        _modelsFuture = _categorizeModels();
+      });
+
+      widget.onSelectModel(model.name);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _downloadingModelIds.remove(model.id);
+        _downloadProgress.remove(model.id);
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to download ${model.name}. Please try again.'),
+        ),
+      );
+    }
   }
 
   @override
@@ -181,6 +292,8 @@ class _ModelSelectorOverlayState extends State<ModelSelectorOverlay> {
                                             borderColor: borderColor,
                                             selected: widget.currentModel == model.name,
                                             enabled: true,
+                                            isDownloading: false,
+                                            progressValue: null,
                                             onTap: () {
                                               widget.onSelectModel(model.name);
                                               widget.onClose();
@@ -202,8 +315,16 @@ class _ModelSelectorOverlayState extends State<ModelSelectorOverlay> {
                                             subtitleColor: subtitleColor,
                                             borderColor: borderColor,
                                             selected: false,
-                                            enabled: false,
-                                            onTap: () {},
+                                            enabled: true,
+                                            isDownloading:
+                                                _downloadingModelIds.contains(model.id),
+                                            progressValue: _downloadProgress[model.id],
+                                            onTap: () => _confirmAndDownloadModel(
+                                              model,
+                                              isDark,
+                                              subtitleColor,
+                                              bg,
+                                            ),
                                           ),
                                         ),
                                       ],
@@ -258,10 +379,12 @@ class _ModelSelectorOverlayState extends State<ModelSelectorOverlay> {
     required Color borderColor,
     required bool selected,
     required bool enabled,
+    required bool isDownloading,
+    required double? progressValue,
     required VoidCallback onTap,
   }) {
     final foregroundColor = isDark ? Colors.white : Colors.black;
-    final accentColor = selected ? nothingRed : borderColor;
+    final accentColor = (selected || isDownloading) ? nothingRed : borderColor;
 
     return GestureDetector(
       onTap: enabled ? onTap : null,
@@ -275,46 +398,76 @@ class _ModelSelectorOverlayState extends State<ModelSelectorOverlay> {
               ? (isDark ? const Color(0xFF1C1A1A) : const Color(0xFFFFF7F7))
               : null,
         ),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    model.name.toUpperCase(),
-                    style: TextStyle(
-                      fontFamily: 'Courier',
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      color: selected ? nothingRed : foregroundColor,
-                      letterSpacing: 2,
-                    ),
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        model.name.toUpperCase(),
+                        style: TextStyle(
+                          fontFamily: 'Courier',
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: (selected || isDownloading)
+                              ? nothingRed
+                              : foregroundColor,
+                          letterSpacing: 2,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        model.description,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: subtitleColor,
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    model.description,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: subtitleColor,
+                ),
+                const SizedBox(width: 12),
+                if (isDownloading)
+                  const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(nothingRed),
                     ),
+                  )
+                else
+                  Container(
+                    width: 20,
+                    height: 20,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: selected ? nothingRed : Colors.transparent,
+                      border: Border.all(color: selected ? nothingRed : accentColor),
+                    ),
+                    child: selected
+                        ? const Icon(Icons.check, size: 12, color: Colors.white)
+                        : null,
                   ),
-                ],
-              ),
+              ],
             ),
-            const SizedBox(width: 12),
-            Container(
-              width: 20,
-              height: 20,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: selected ? nothingRed : Colors.transparent,
-                border: Border.all(color: selected ? nothingRed : accentColor),
+            if (isDownloading) ...[
+              const SizedBox(height: 10),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(2),
+                child: LinearProgressIndicator(
+                  value: progressValue,
+                  minHeight: 6,
+                  backgroundColor:
+                      isDark ? const Color(0xFF27272A) : const Color(0xFFE5E7EB),
+                  valueColor: const AlwaysStoppedAnimation<Color>(nothingRed),
+                ),
               ),
-              child: selected
-                  ? const Icon(Icons.check, size: 12, color: Colors.white)
-                  : null,
-            ),
+            ],
           ],
         ),
       ),
