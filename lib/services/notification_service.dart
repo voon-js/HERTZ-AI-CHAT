@@ -86,6 +86,13 @@ class NotificationService {
 
     if (!await areDownloadNotificationsEnabled()) return;
 
+    // Use 0-100 percentage values for Android notification progress fields.
+    // Passing raw byte counts can exceed Integer size and crash plugin parsing.
+    final hasTotal = total > 0;
+    final progressPercent = hasTotal
+        ? ((received / total) * 100).clamp(0, 100).toInt()
+        : 0;
+
     final details = NotificationDetails(
       android: AndroidNotificationDetails(
         _channelId,
@@ -96,16 +103,16 @@ class NotificationService {
         ongoing: true,
         onlyAlertOnce: true,
         showProgress: true,
-        maxProgress: total > 0 ? total : 0,
-        progress: total > 0 ? received.clamp(0, total) : 0,
-        indeterminate: total <= 0,
+        maxProgress: hasTotal ? 100 : 0,
+        progress: hasTotal ? progressPercent : 0,
+        indeterminate: !hasTotal,
         playSound: false,
       ),
     );
 
     final title = 'Downloading model';
-    final body = total > 0
-        ? '$modelName • ${((received / total) * 100).clamp(0, 100).toStringAsFixed(0)}%'
+    final body = hasTotal
+        ? '$modelName • $progressPercent%'
         : '$modelName • Preparing...';
 
     await _plugin.show(

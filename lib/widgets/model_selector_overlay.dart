@@ -157,7 +157,7 @@ class _ModelSelectorOverlayState extends State<ModelSelectorOverlay> {
       });
 
       widget.onSelectModel(model.name);
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       setState(() {
         _downloadingModelIds.remove(model.id);
