@@ -650,6 +650,117 @@ class _ChatPageState extends State<ChatPage>
     }
   }
 
+  void _showCurrentModelInfo() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark ? Colors.black : Colors.white;
+    final textColor = isDark ? Colors.white : Colors.black;
+    final subtitleColor =
+        isDark ? const Color(0xFF71717A) : const Color(0xFF6B7280);
+    final borderColor = isDark ? const Color(0xFF27272A) : Colors.black;
+
+    final model = ModelCatalog.byName(_currentModel);
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: bg,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(2),
+          side: BorderSide(color: borderColor),
+        ),
+        title: Text(
+          'MODEL INFO',
+          style: TextStyle(
+            fontFamily: 'Courier',
+            fontWeight: FontWeight.bold,
+            letterSpacing: 2,
+            color: textColor,
+          ),
+        ),
+        content: SizedBox(
+          width: 340,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                model.name,
+                style: TextStyle(
+                  fontFamily: 'Courier',
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: textColor,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                model.description,
+                style: TextStyle(
+                  fontFamily: 'Courier',
+                  fontSize: 11,
+                  color: subtitleColor,
+                ),
+              ),
+              const SizedBox(height: 14),
+              _buildModelInfoRow('Quantization', model.quantization, textColor, subtitleColor),
+              _buildModelInfoRow('Parameters', model.parameters, textColor, subtitleColor),
+              _buildModelInfoRow('Context Tokens', model.contextTokens, textColor, subtitleColor),
+              _buildModelInfoRow('Recommended RAM', model.recommendedRam, textColor, subtitleColor),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text(
+              'CLOSE',
+              style: TextStyle(
+                fontFamily: 'Courier',
+                color: nothingRed,
+                letterSpacing: 1.5,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildModelInfoRow(
+    String label,
+    String value,
+    Color textColor,
+    Color subtitleColor,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: RichText(
+        text: TextSpan(
+          children: [
+            TextSpan(
+              text: '$label: ',
+              style: TextStyle(
+                fontFamily: 'Courier',
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+                color: textColor,
+              ),
+            ),
+            TextSpan(
+              text: value,
+              style: TextStyle(
+                fontFamily: 'Courier',
+                fontSize: 11,
+                color: subtitleColor,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -683,6 +794,7 @@ class _ChatPageState extends State<ChatPage>
                   },
                   onOpenModelSelector: () =>
                       setState(() => _isModelSelectorOpen = true),
+                  onOpenModelInfo: _showCurrentModelInfo,
                   currentModel: _currentModel,
                 ),
                 Expanded(

@@ -3,12 +3,14 @@ import 'package:flutter/material.dart';
 class TopBar extends StatelessWidget {
   final VoidCallback onOpenSidebar;
   final VoidCallback onOpenModelSelector;
+  final VoidCallback onOpenModelInfo;
   final String currentModel;
 
   const TopBar({
     super.key,
     required this.onOpenSidebar,
     required this.onOpenModelSelector,
+    required this.onOpenModelInfo,
     required this.currentModel,
   });
 
@@ -63,7 +65,14 @@ class TopBar extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(width: 44), // spacer to balance layout
+          InkWell(
+            onTap: onOpenModelInfo,
+            borderRadius: BorderRadius.circular(2),
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: Icon(Icons.info_outline, color: textColor, size: 22),
+            ),
+          ),
         ],
       ),
     );

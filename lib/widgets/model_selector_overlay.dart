@@ -427,6 +427,29 @@ class _ModelSelectorOverlayState extends State<ModelSelectorOverlay> {
                           color: subtitleColor,
                         ),
                       ),
+                      if (model.badgeLabel != null) ...[
+                        const SizedBox(height: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: nothingRed),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                          child: Text(
+                            model.badgeLabel!,
+                            style: const TextStyle(
+                              fontFamily: 'Courier',
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: nothingRed,
+                              letterSpacing: 1.5,
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
