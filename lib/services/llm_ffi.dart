@@ -28,6 +28,11 @@ typedef GenerateNative = ffi.Int32 Function(
   ffi.Pointer<ffi.Void> ctx,
   ffi.Pointer<ffi_pkg.Utf8> prompt,
   ffi.Int32 maxTokens,
+  ffi.Float temperature,
+  ffi.Float topP,
+  ffi.Int32 topK,
+  ffi.Float minP,
+  ffi.Float repeatPenalty,
   ffi.Pointer<ffi.NativeFunction<TokenCallbackNative>> callback,
 );
 
@@ -35,6 +40,11 @@ typedef GenerateDart = int Function(
   ffi.Pointer<ffi.Void> ctx,
   ffi.Pointer<ffi_pkg.Utf8> prompt,
   int maxTokens,
+  double temperature,
+  double topP,
+  int topK,
+  double minP,
+  double repeatPenalty,
   ffi.Pointer<ffi.NativeFunction<TokenCallbackNative>> callback,
 );
 
@@ -134,6 +144,11 @@ class LlmFFI {
   /// [ctx] Context from initModel()
   /// [prompt] Input text to generate from
   /// [maxTokens] Maximum tokens to generate
+  /// [temperature] Sampling temperature (0.0-2.0, default 0.7)
+  /// [topP] Nucleus sampling parameter (0.0-1.0, default 0.9)
+  /// [topK] Top-k tokens to keep (1-100, default 40)
+  /// [minP] Minimum probability threshold (0.0-1.0, default 0.05)
+  /// [repeatPenalty] Repetition penalty (1.0-2.0, default 1.12)
   /// [callback] Function pointer called for each token
   /// 
   /// Returns 0 on success, -1 on error
@@ -141,14 +156,19 @@ class LlmFFI {
     ffi.Pointer<ffi.Void> ctx,
     String prompt,
     int maxTokens,
+    double temperature,
+    double topP,
+    int topK,
+    double minP,
+    double repeatPenalty,
     ffi.Pointer<ffi.NativeFunction<TokenCallbackNative>> callback,
   ) {
     _ensureInitialized();
     
     final promptPtr = prompt.toNativeUtf8();
     try {
-      print('[LlmFFI] Generate: maxTokens=$maxTokens, prompt="${prompt.substring(0, min(50, prompt.length))}"');
-      final result = _generate(ctx, promptPtr, maxTokens, callback);
+      print('[LlmFFI] Generate: maxTokens=$maxTokens, temp=$temperature, topP=$topP, topK=$topK, prompt="${prompt.substring(0, min(50, prompt.length))}"');
+      final result = _generate(ctx, promptPtr, maxTokens, temperature, topP, topK, minP, repeatPenalty, callback);
       
       if (result != 0) {
         throw Exception('Generate failed: ${getError()}');

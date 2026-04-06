@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #define LOG_TAG "LlamaWrapper"
@@ -27,6 +28,35 @@ struct LlamaContextWrapper {
     std::mutex mutex;
     std::atomic<bool> is_generating{false};
 };
+
+static size_t find_first_stop_marker(const std::string & text) {
+    static const char * kStopMarkers[] = {
+        "<|end|>",
+        "\nUser\n",
+        "\nuser\n",
+        "\nUser:",
+        "\nUSER:",
+        "\nHuman:",
+        "\nA:",
+        "\nQ:",
+        "\n## Instruction",
+        "\n### Instruction",
+        "### User:",
+        "<|user|>",
+        "<|im_start|>user",
+        "<start_of_turn>user"
+    };
+
+    size_t first = std::string::npos;
+    for (const char * marker : kStopMarkers) {
+        const size_t pos = text.find(marker);
+        if (pos != std::string::npos && (first == std::string::npos || pos < first)) {
+            first = pos;
+        }
+    }
+
+    return first;
+}
 
 static bool tokenize_prompt(
     const llama_vocab * vocab,
@@ -117,10 +147,12 @@ LlamaContext llama_init_model(const char * model_path, int n_threads) {
         return nullptr;
     }
 
-    // Simple, stable default sampling chain for mobile usage.
+    // Chat-focused defaults: moderate randomness plus repetition controls.
     llama_sampler_chain_add(sampler, llama_sampler_init_top_k(40));
     llama_sampler_chain_add(sampler, llama_sampler_init_top_p(0.9f, 1));
-    llama_sampler_chain_add(sampler, llama_sampler_init_temp(0.8f));
+    llama_sampler_chain_add(sampler, llama_sampler_init_min_p(0.05f, 1));
+    llama_sampler_chain_add(sampler, llama_sampler_init_temp(0.7f));
+    llama_sampler_chain_add(sampler, llama_sampler_init_penalties(64, 1.12f, 0.0f, 0.0f));
     llama_sampler_chain_add(sampler, llama_sampler_init_dist(1234));
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
@@ -147,6 +179,11 @@ int llama_generate(
     LlamaContext ctx,
     const char * prompt,
     int max_tokens,
+    float temperature,
+    float top_p,
+    int32_t top_k,
+    float min_p,
+    float repeat_penalty,
     TokenCallback callback
 ) {
     if (!ctx) {
@@ -164,6 +201,11 @@ int llama_generate(
     if (max_tokens < 1) {
         max_tokens = 1;
     }
+    if (temperature < 0.0f) temperature = 0.7f;
+    if (top_p < 0.0f || top_p > 1.0f) top_p = 0.9f;
+    if (top_k < 1) top_k = 40;
+    if (min_p < 0.0f || min_p > 1.0f) min_p = 0.05f;
+    if (repeat_penalty < 1.0f || repeat_penalty > 2.0f) repeat_penalty = 1.12f;
 
     g_cancel_requested.store(false);
 
@@ -176,13 +218,27 @@ int llama_generate(
     }
 
     int rc = 0;
+    llama_sampler * sampler = nullptr;
 
     try {
         std::lock_guard<std::mutex> lock(wrapper->mutex);
 
         // Reset state for a fresh completion pass.
         llama_memory_clear(llama_get_memory(wrapper->ctx), true);
-        llama_sampler_reset(wrapper->sampler);
+
+        llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
+        sampler = llama_sampler_chain_init(sparams);
+        if (!sampler) {
+            std::snprintf(g_error_buffer, sizeof(g_error_buffer), "Failed to create sampler");
+            return -1;
+        }
+
+        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(top_k));
+        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(top_p, 1));
+        llama_sampler_chain_add(sampler, llama_sampler_init_min_p(min_p, 1));
+        llama_sampler_chain_add(sampler, llama_sampler_init_temp(temperature));
+        llama_sampler_chain_add(sampler, llama_sampler_init_penalties(64, repeat_penalty, 0.0f, 0.0f));
+        llama_sampler_chain_add(sampler, llama_sampler_init_dist(1234));
 
         std::vector<llama_token> prompt_tokens;
         if (!tokenize_prompt(wrapper->vocab, prompt, prompt_tokens)) {
@@ -207,12 +263,14 @@ int llama_generate(
                 rc = -1;
             }
 
+            std::string generated_text;
+
             for (int i = 0; rc == 0 && i < max_tokens; ++i) {
                 if (g_cancel_requested.load()) {
                     break;
                 }
 
-                const llama_token token = llama_sampler_sample(wrapper->sampler, wrapper->ctx, -1);
+                const llama_token token = llama_sampler_sample(sampler, wrapper->ctx, -1);
 
                 if (llama_vocab_is_eog(wrapper->vocab, token)) {
                     break;
@@ -229,10 +287,28 @@ int llama_generate(
                 );
 
                 if (n_piece > 0) {
-                    callback(piece, n_piece);
+                    const std::string token_piece(piece, static_cast<size_t>(n_piece));
+                    const std::string candidate = generated_text + token_piece;
+                    const size_t stop_pos = find_first_stop_marker(candidate);
+
+                    if (stop_pos != std::string::npos) {
+                        if (stop_pos > generated_text.size()) {
+                            const std::string emit_piece = candidate.substr(
+                                generated_text.size(),
+                                stop_pos - generated_text.size()
+                            );
+                            if (!emit_piece.empty()) {
+                                callback(emit_piece.c_str(), static_cast<int32_t>(emit_piece.size()));
+                            }
+                        }
+                        break;
+                    }
+
+                    generated_text = candidate;
+                    callback(token_piece.c_str(), static_cast<int32_t>(token_piece.size()));
                 }
 
-                llama_sampler_accept(wrapper->sampler, token);
+                llama_sampler_accept(sampler, token);
 
                 llama_batch one = llama_batch_init(1, 0, 1);
                 one.n_tokens = 1;
@@ -258,6 +334,9 @@ int llama_generate(
 
     g_cancel_requested.store(false);
     wrapper->is_generating = false;
+    if (sampler) {
+        llama_sampler_free(sampler);
+    }
     return rc;
 }
 

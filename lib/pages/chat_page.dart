@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/ai_service.dart';
 import '../services/chat_history_service.dart';
+import '../services/generation_settings.dart';
 import '../services/model_manager.dart';
 import '../services/model_catalog.dart';
 import '../theme/app_theme.dart';
@@ -34,6 +35,7 @@ class _ChatPageState extends State<ChatPage>
   final AIService _ai = AIService();
   final ChatHistoryService _historyService = ChatHistoryService();
   final ModelManager _modelManager = ModelManager();
+  final GenerationSettingsService _generationSettings = GenerationSettingsService();
   final List<ChatConversation> _conversations = [];
   List<ChatMessage> _messages = [];
   String? _activeConversationId;
@@ -64,6 +66,7 @@ class _ChatPageState extends State<ChatPage>
       duration: const Duration(milliseconds: 1150),
     )..repeat(reverse: true);
     _firstLoadModelsFuture = _categorizeModels();
+    unawaited(_generationSettings.load());
     unawaited(_bootstrap());
   }
 
@@ -562,11 +565,61 @@ class _ChatPageState extends State<ChatPage>
     _modelManager.clearCancellationState();
   }
 
+  String _systemInstruction(ModelCatalogEntry model) {
+    return 'You are a helpful AI assistant. Your name is ${model.name}. When asked for your name, reply with ${model.name}. Reply naturally like a normal chat assistant. Keep answers concise unless the user asks for detail. Do not write both sides of a conversation. Do not invent another user question.';
+  }
+
+  String _buildInferencePrompt(String userPrompt) {
+    final model = ModelCatalog.byName(_currentModel);
+    final system = _systemInstruction(model);
+
+    if (model.id == ModelCatalog.defaultModelId) {
+      return '<|system|>\n$system<|end|>\n<|user|>\n$userPrompt<|end|>\n<|assistant|>\n';
+    }
+
+    if (model.id.contains('llama_3_2')) {
+      return '<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n$system<|eot_id|><|start_header_id|>user<|end_header_id|>\n$userPrompt<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n';
+    }
+
+    if (model.id.contains('qwen')) {
+      return '<|im_start|>system\n$system<|im_end|>\n<|im_start|>user\n$userPrompt<|im_end|>\n<|im_start|>assistant\n';
+    }
+
+    if (model.id.contains('gemma')) {
+      return '<start_of_turn>system\n$system<end_of_turn>\n<start_of_turn>user\n$userPrompt<end_of_turn>\n<start_of_turn>model\n';
+    }
+
+    if (model.id.contains('phi_3_5')) {
+      return '<|system|>\n$system<|end|>\n<|user|>\n$userPrompt<|end|>\n<|assistant|>\n';
+    }
+
+    return 'System: $system\nUser: $userPrompt\nAssistant:';
+  }
+
+  int _maxTokensForCurrentModel() {
+    final model = ModelCatalog.byName(_currentModel);
+
+    if (model.id == ModelCatalog.defaultModelId ||
+        model.id.contains('llama_3_2_1b') ||
+        model.id.contains('qwen2_5_coder_1_5b')) {
+      return 120;
+    }
+
+    if (model.id.contains('qwen2_5_7b') || model.id.contains('phi_3_5')) {
+      return 220;
+    }
+
+    return 180;
+  }
+
   Future<void> _sendPrompt(String prompt) async {
     if (_isGenerating || _isInitializing) return;
 
     final now = DateTime.now();
     final conversationId = _activeConversationId ?? _createConversationId();
+    final inferencePrompt = _buildInferencePrompt(prompt);
+    final maxTokens = _maxTokensForCurrentModel();
+
     setState(() {
       _activeConversationId = conversationId;
       _messages = [
@@ -590,7 +643,16 @@ class _ChatPageState extends State<ChatPage>
     _scheduleHistorySave();
 
     try {
-      await for (final token in _ai.sendMessage(prompt, maxTokens: 180)) {
+      final settings = _generationSettings.current;
+      await for (final token in _ai.sendMessage(
+        inferencePrompt,
+        maxTokens: maxTokens,
+        temperature: settings.temperature,
+        topP: settings.topP,
+        topK: settings.topK,
+        minP: settings.minP,
+        repeatPenalty: settings.repeatPenalty,
+      )) {
         if (!mounted) return;
         setState(() {
           final last = _messages.last;
@@ -702,6 +764,8 @@ class _ChatPageState extends State<ChatPage>
                 ),
               ),
               const SizedBox(height: 14),
+              _buildModelInfoRow('Base Model', model.baseModelName, textColor, subtitleColor),
+              _buildModelInfoRow('Model Size', model.modelSize, textColor, subtitleColor),
               _buildModelInfoRow('Quantization', model.quantization, textColor, subtitleColor),
               _buildModelInfoRow('Parameters', model.parameters, textColor, subtitleColor),
               _buildModelInfoRow('Context Tokens', model.contextTokens, textColor, subtitleColor),
@@ -792,8 +856,10 @@ class _ChatPageState extends State<ChatPage>
                     FocusManager.instance.primaryFocus?.unfocus();
                     setState(() => _isSidebarOpen = true);
                   },
-                  onOpenModelSelector: () =>
-                      setState(() => _isModelSelectorOpen = true),
+                  onOpenModelSelector: () {
+                    FocusManager.instance.primaryFocus?.unfocus();
+                    setState(() => _isModelSelectorOpen = true);
+                  },
                   onOpenModelInfo: _showCurrentModelInfo,
                   currentModel: _currentModel,
                 ),

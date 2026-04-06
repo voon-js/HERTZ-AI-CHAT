@@ -141,7 +141,6 @@ class _ModelSelectorOverlayState extends State<ModelSelectorOverlay> {
           if (!mounted) return;
           final hasTotal = total > 0;
           final value = hasTotal ? (received / total).clamp(0.0, 1.0) : null;
-          final percent = hasTotal ? ((value! * 100).round()) : null;
 
           setState(() {
             _downloadProgress[model.id] = value;
@@ -427,27 +426,37 @@ class _ModelSelectorOverlayState extends State<ModelSelectorOverlay> {
                           color: subtitleColor,
                         ),
                       ),
-                      if (model.badgeLabel != null) ...[
+                      if (model.isHeavy) ...[
                         const SizedBox(height: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            border: Border.all(color: nothingRed),
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                          child: Text(
-                            model.badgeLabel!,
-                            style: const TextStyle(
-                              fontFamily: 'Courier',
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                              color: nothingRed,
-                              letterSpacing: 1.5,
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                border: Border.all(
+                                  color: isDark
+                                      ? const Color(0xFFF59E0B)
+                                      : const Color(0xFFB45309),
+                                ),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                              child: Text(
+                                'HEAVY',
+                                style: TextStyle(
+                                  fontFamily: 'Courier',
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  color: isDark
+                                      ? const Color(0xFFF59E0B)
+                                      : const Color(0xFFB45309),
+                                  letterSpacing: 1.5,
+                                ),
+                              ),
                             ),
-                          ),
+                          ],
                         ),
                       ],
                     ],
@@ -488,6 +497,15 @@ class _ModelSelectorOverlayState extends State<ModelSelectorOverlay> {
                   backgroundColor:
                       isDark ? const Color(0xFF27272A) : const Color(0xFFE5E7EB),
                   valueColor: const AlwaysStoppedAnimation<Color>(nothingRed),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Model size: ${model.modelSize}',
+                style: TextStyle(
+                  fontFamily: 'Courier',
+                  fontSize: 11,
+                  color: subtitleColor,
                 ),
               ),
             ],

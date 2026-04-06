@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ffi' as ffi;
 import 'dart:isolate';
 
@@ -119,6 +120,11 @@ class AIService {
   Stream<String> sendMessage(
     String prompt, {
     int maxTokens = 256,
+    double temperature = 0.7,
+    double topP = 0.9,
+    int topK = 40,
+    double minP = 0.05,
+    double repeatPenalty = 1.12,
   }) async* {
     if (!isInitialized) {
       throw StateError(
@@ -153,6 +159,11 @@ class AIService {
       'id': id,
       'prompt': prompt,
       'maxTokens': maxTokens,
+      'temperature': temperature,
+      'topP': topP,
+      'topK': topK,
+      'minP': minP,
+      'repeatPenalty': repeatPenalty,
     });
 
     try {
@@ -300,7 +311,7 @@ class AIService {
     }
 
     final bytes = tokenPtr.cast<ffi.Uint8>().asTypedList(length);
-    final token = String.fromCharCodes(bytes);
+    final token = utf8.decode(bytes, allowMalformed: true);
 
     _workerEventPort!.send({
       'type': 'token',
@@ -372,11 +383,27 @@ class AIService {
 
           final prompt = message['prompt'] as String;
           final maxTokens = message['maxTokens'] as int;
+          final temperature = (message['temperature'] as num?)?.toDouble() ?? 0.7;
+          final topP = (message['topP'] as num?)?.toDouble() ?? 0.9;
+          final topK = (message['topK'] as int?) ?? 40;
+          final minP = (message['minP'] as num?)?.toDouble() ?? 0.05;
+          final repeatPenalty = (message['repeatPenalty'] as num?)?.toDouble() ?? 1.12;
+
           final callbackPtr = ffi.Pointer.fromFunction<_TokenCallbackNativeFn>(
             _workerTokenCallback,
           );
 
-          _workerLlm.generate(_workerContext!, prompt, maxTokens, callbackPtr);
+          _workerLlm.generate(
+            _workerContext!,
+            prompt,
+            maxTokens,
+            temperature,
+            topP,
+            topK,
+            minP,
+            repeatPenalty,
+            callbackPtr,
+          );
 
           _workerBusy = false;
           _workerActiveRequestId = -1;

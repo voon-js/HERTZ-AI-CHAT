@@ -44,31 +44,33 @@ typedef void (*TokenCallback)(const char* token, int length);
 LlamaContext llama_init_model(const char* model_path, int n_threads);
 
 /**
- * Generate tokens for a prompt with streaming callback.
+ * Generate tokens for a prompt with streaming callback and sampler control.
  * 
  * BLOCKS until generation complete or max tokens reached.
  * For UI apps, call from background thread.
  * 
- * @param ctx        Context handle from llama_init_model()
- * @param prompt     Input text (e.g., "What is AI?")
- * @param max_tokens Maximum tokens to generate
- * @param callback   Called for each token: callback(token_ptr, token_len)
- *                   May be called from different thread - must be thread-safe.
+ * @param ctx              Context handle from llama_init_model()
+ * @param prompt           Input text (e.g., "What is AI?")
+ * @param max_tokens       Maximum tokens to generate
+ * @param temperature      Sampling temperature (0.3-2.0, default 0.7)
+ * @param top_p            Nucleus sampling parameter (0.0-1.0, default 0.9)
+ * @param top_k            Top-k tokens to keep (1-100, default 40)
+ * @param min_p            Minimum probability threshold (0.0-1.0, default 0.05)
+ * @param repeat_penalty   Repetition penalty (1.0-2.0, default 1.12)
+ * @param callback         Called for each token: callback(token_ptr, token_len)
+ *                         May be called from different thread - must be thread-safe.
  * 
  * @return 0 on success, -1 on error (check llama_get_error())
- * 
- * Example:
- *   void my_callback(const char* token, int len) {
- *     fwrite(token, 1, len, stdout);
- *     fflush(stdout);
- *   }
- *   
- *   int status = llama_generate(ctx, "Hello", 100, my_callback);
  */
 int llama_generate(
     LlamaContext ctx,
     const char* prompt,
     int max_tokens,
+    float temperature,
+    float top_p,
+    int32_t top_k,
+    float min_p,
+    float repeat_penalty,
     TokenCallback callback
 );
 
