@@ -1,7 +1,15 @@
+import 'dart:convert';
 import 'dart:async';
+import 'dart:io';
+import 'dart:isolate';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:extract_text/extract_text.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart' as sfpdf;
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart'
+  hide ModelManager;
+import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/ai_service.dart';
@@ -54,6 +62,18 @@ class _ChatPageState extends State<ChatPage>
   bool _isHistorySaveInProgress = false;
   bool _isHistorySaveQueued = false;
   bool _isFirstLoadInstalling = false;
+  final List<XFile> _pendingImages = [];
+  final List<XFile> _pendingFiles = [];
+  static const int _maxImageOcrBytes = 5 * 1024 * 1024;
+  static const int _maxTextPreviewBytes = 256 * 1024;
+  static const int _maxBinaryExtractBytes = 8 * 1024 * 1024;
+  static const int _maxAttachmentItemsForExtraction = 4;
+  static const int _maxExtractedChunkChars = 4000;
+  static const int _maxCombinedAttachmentChars = 12000;
+  static const int _maxUserPromptChars = 2000;
+  static const int _maxInferencePromptChars = 5000;
+  static const int _attachmentWarningWordThreshold = 60;
+  static const int _attachmentWarningCharThreshold = 470;
 
   static const String _firstLoadDoneKey = 'first_time_setup_done_v2';
   static const String _activeModelIdKey = 'active_model_id_v2';
@@ -71,6 +91,95 @@ class _ChatPageState extends State<ChatPage>
   }
 
   void _triggerBorderShine() {
+  }
+
+  /// Entry point function for isolate-based document extraction.
+  /// This runs in a separate isolate and receives filePath via ReceivePort.
+  static void _extractDocumentIsolateEntryPoint(SendPort sendPort) {
+    final receivePort = ReceivePort();
+    sendPort.send(receivePort.sendPort);
+
+    receivePort.listen((dynamic message) async {
+      if (message is List && message.length == 3) {
+        final filePath = message[0] as String;
+        final resultPort = message[1] as SendPort;
+        final rootToken = message[2] as RootIsolateToken;
+
+        // Allow plugin/method-channel calls from this background isolate.
+        BackgroundIsolateBinaryMessenger.ensureInitialized(rootToken);
+
+        try {
+          final file = File(filePath);
+          if (!await file.exists()) {
+            resultPort.send('[File not found]');
+            receivePort.close();
+            return;
+          }
+
+          final extractedText = await ExtractText.fromFile(filePath);
+          resultPort.send(extractedText);
+          receivePort.close();
+        } catch (e) {
+          resultPort.send('[File extraction error: $e]');
+          receivePort.close();
+        }
+      }
+    });
+  }
+
+  /// Wrapper that runs document extraction in an isolate with timeout protection.
+  /// If extraction hangs or crashes, the isolate failure is isolated from main UI.
+  Future<String> _extractWithIsolateAndTimeout(
+    String filePath, {
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    try {
+      final rootToken = RootIsolateToken.instance;
+      if (rootToken == null) {
+        return '[File extraction unavailable: isolate token missing]';
+      }
+
+      final receivePort = ReceivePort();
+      final resultPort = ReceivePort();
+
+      // Spawn isolate with entry point
+      await Isolate.spawn(
+        _extractDocumentIsolateEntryPoint,
+        receivePort.sendPort,
+        onExit: receivePort.sendPort,
+        onError: receivePort.sendPort,
+      );
+
+      // Get the isolate's send port
+      final isolateSendPort = await receivePort.first as SendPort;
+
+      // Send filePath, resultPort, and root token to isolate
+      isolateSendPort.send([filePath, resultPort.sendPort, rootToken]);
+
+      // Wait for response with timeout
+      final result = await resultPort.first.timeout(
+        timeout,
+        onTimeout: () => '[File extraction timed out - might be corrupted]',
+      );
+
+      receivePort.close();
+      resultPort.close();
+
+      return result is String ? result : '[File extraction failed]';
+    } catch (e) {
+      // Isolate spawn or communication failed - graceful fallback
+      return '[File extraction not supported on this device]';
+    }
+  }
+
+  Future<String> _extractTextFromPdf(String filePath) async {
+    final bytes = await File(filePath).readAsBytes();
+    final document = sfpdf.PdfDocument(inputBytes: bytes);
+    try {
+      return sfpdf.PdfTextExtractor(document).extractText();
+    } finally {
+      document.dispose();
+    }
   }
 
   @override
@@ -725,23 +834,362 @@ class _ChatPageState extends State<ChatPage>
     return 180;
   }
 
+  void _handleImagesSelected(List<XFile> images) {
+    if (images.isEmpty) return;
+    setState(() {
+      _pendingImages.addAll(images);
+      _isFileUploadOpen = false;
+    });
+
+    unawaited(_showQueuedAttachmentWordCountSnackBar());
+  }
+
+  void _handleFilesSelected(List<XFile> files) {
+    if (files.isEmpty) return;
+    setState(() {
+      _pendingFiles.addAll(files);
+      _isFileUploadOpen = false;
+    });
+
+    unawaited(_showQueuedAttachmentWordCountSnackBar());
+  }
+
+  void _openImageViewer(List<String> imagePaths, int initialIndex) {
+    if (imagePaths.isEmpty) return;
+
+    final startIndex = initialIndex.clamp(0, imagePaths.length - 1);
+    final pageController = PageController(initialPage: startIndex);
+    var currentPage = startIndex;
+
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.95),
+      builder: (_) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Dialog(
+              backgroundColor: Colors.transparent,
+              insetPadding: EdgeInsets.zero,
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: PageView.builder(
+                      controller: pageController,
+                      onPageChanged: (index) {
+                        setModalState(() {
+                          currentPage = index;
+                        });
+                      },
+                      itemCount: imagePaths.length,
+                      itemBuilder: (context, index) {
+                        final path = imagePaths[index];
+                        return Center(
+                          child: InteractiveViewer(
+                            minScale: 0.8,
+                            maxScale: 4.0,
+                            child: Image.file(
+                              File(path),
+                              fit: BoxFit.contain,
+                              cacheWidth: 2048,
+                              filterQuality: FilterQuality.medium,
+                              errorBuilder: (_, __, ___) => const Icon(
+                                Icons.image_not_supported_outlined,
+                                color: Colors.white,
+                                size: 48,
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  if (imagePaths.length > 1)
+                    Positioned(
+                      bottom: 28,
+                      left: 0,
+                      right: 0,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: List.generate(imagePaths.length, (index) {
+                          final isActive = index == currentPage;
+                          return AnimatedContainer(
+                            duration: const Duration(milliseconds: 180),
+                            curve: Curves.easeOut,
+                            width: isActive ? 18 : 7,
+                            height: 7,
+                            margin: const EdgeInsets.symmetric(horizontal: 4),
+                            decoration: BoxDecoration(
+                              color: isActive
+                                  ? Colors.white
+                                  : Colors.white.withValues(alpha: 0.45),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                          );
+                        }),
+                      ),
+                    ),
+                  Positioned(
+                    top: 24,
+                    right: 24,
+                    child: GestureDetector(
+                      onTap: () => Navigator.of(context).pop(),
+                      child: Container(
+                        width: 38,
+                        height: 38,
+                        decoration: const BoxDecoration(
+                          color: Colors.black54,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.close,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<String> _extractTextFromImages(List<XFile> images) async {
+    if (images.isEmpty) return '';
+
+    final recognizer = TextRecognizer(script: TextRecognitionScript.latin);
+    final extractedChunks = <String>[];
+
+    try {
+      for (var i = 0; i < images.length; i++) {
+        final imageFile = File(images[i].path);
+        if (!await imageFile.exists()) continue;
+
+        final imageSize = await imageFile.length();
+        if (imageSize > _maxImageOcrBytes) {
+          extractedChunks.add(
+            'Image ${i + 1} (${images[i].name}) is too large to OCR safely on-device.',
+          );
+          continue;
+        }
+
+        final inputImage = InputImage.fromFilePath(images[i].path);
+        final result = await recognizer.processImage(inputImage);
+        final text = result.text.trim();
+        if (text.isNotEmpty) {
+          final clipped = text.length > _maxExtractedChunkChars
+              ? '${text.substring(0, _maxExtractedChunkChars)}\n\n[Image text truncated due to size.]'
+              : text;
+          extractedChunks.add('Image ${i + 1} text:\n$clipped');
+        }
+      }
+    } catch (_) {
+      // Ignore OCR failures for individual images and continue with what we have.
+    } finally {
+      await recognizer.close();
+    }
+
+    return extractedChunks.join('\n\n').trim();
+  }
+
+  Future<String> _extractTextFromFiles(List<XFile> files) async {
+    if (files.isEmpty) return '';
+
+    final extractedChunks = <String>[];
+    const plainTextExtensions = {
+      'txt',
+      'md',
+      'csv',
+      'json',
+      'xml',
+      'html',
+      'htm',
+      'log',
+      'rtf',
+    };
+    const binaryExtensions = {'pdf', 'doc', 'docx'};
+
+    for (var i = 0; i < files.length; i++) {
+      final file = files[i];
+      final extension = file.path.split('.').last.toLowerCase();
+      String? extractedText;
+      final sourceFile = File(file.path);
+
+      if (!await sourceFile.exists()) {
+        continue;
+      }
+
+      final fileSize = await sourceFile.length();
+
+      try {
+        if (plainTextExtensions.contains(extension)) {
+          // Plain text: simple UTF-8 streaming
+          final bytesToRead = fileSize > _maxTextPreviewBytes
+              ? _maxTextPreviewBytes
+              : fileSize;
+          extractedText = await sourceFile
+              .openRead(0, bytesToRead)
+              .transform(const Utf8Decoder(allowMalformed: true))
+              .join();
+          if (fileSize > _maxTextPreviewBytes) {
+            extractedText = '${extractedText.trimRight()}\n\n[Preview truncated: file is too large for full in-app extraction.]';
+          }
+        } else if (extension == 'pdf') {
+          if (fileSize > _maxBinaryExtractBytes) {
+            extractedChunks.add(
+              'File ${i + 1} (${file.name}) is too large for safe PDF text extraction. Max supported size is 8 MB.',
+            );
+            continue;
+          }
+
+          extractedText = await _extractTextFromPdf(file.path);
+          if (extractedText.trim().isEmpty) {
+            extractedChunks.add(
+              'File ${i + 1} (${file.name}) appears to be image-only or has no selectable text. OCR for PDF images is not enabled, so the model will not see text from this file.',
+            );
+            continue;
+          }
+        } else if (binaryExtensions.contains(extension)) {
+          // DOC/DOCX: use isolate with timeout
+          // If extraction hangs or crashes, the isolate failure is isolated from main UI
+          if (fileSize > _maxBinaryExtractBytes) {
+            extractedChunks.add(
+              'File ${i + 1} (${file.name}) is too large for safe in-app extraction. Max supported size is 8 MB for this format.',
+            );
+            continue;
+          }
+
+          extractedText = await _extractWithIsolateAndTimeout(
+            file.path,
+            timeout: const Duration(seconds: 15),
+          );
+
+          if (extension == 'doc' && extractedText.trim().isEmpty) {
+            extractedChunks.add(
+              'File ${i + 1} (${file.name}) is a legacy .doc file and may not be extractable on-device. Try converting it to .docx or .pdf for better results.',
+            );
+            continue;
+          }
+        } else {
+          extractedChunks.add(
+            'File ${i + 1} (${file.name}) was attached, but text extraction is not supported for this format.',
+          );
+          continue;
+        }
+      } catch (_) {
+        extractedText = null;
+      }
+
+      final clean = extractedText?.trim() ?? '';
+      if (clean.isNotEmpty) {
+        final clipped = clean.length > _maxExtractedChunkChars
+            ? '${clean.substring(0, _maxExtractedChunkChars)}\n\n[File text truncated due to size.]'
+            : clean;
+        extractedChunks.add('File ${i + 1} (${file.name}) text:\n$clipped');
+      }
+    }
+
+    return extractedChunks.join('\n\n').trim();
+  }
+
   Future<void> _sendPrompt(String prompt) async {
     if (_isGenerating || _isInitializing) return;
+
+    final userText = prompt.trim();
+    final attachedImages = List<XFile>.from(_pendingImages);
+    final attachedFiles = List<XFile>.from(_pendingFiles);
+    if (userText.isEmpty && attachedImages.isEmpty && attachedFiles.isEmpty) return;
+
+    // Check if user prompt is too long (conservative to prevent crashes)
+    if (userText.length > _maxUserPromptChars) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              'Your prompt is too long (${userText.length} chars). Max is $_maxUserPromptChars chars. Please shorten it or remove attachments.',
+            ),
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      return;
+    }
+
+    final imagesForExtraction = attachedImages
+      .take(_maxAttachmentItemsForExtraction)
+      .toList();
+    final filesForExtraction = attachedFiles
+      .take(_maxAttachmentItemsForExtraction)
+      .toList();
+
+    final extractedImageText = await _extractTextFromImages(imagesForExtraction);
+    final extractedFileText = await _extractTextFromFiles(filesForExtraction);
+
+    final promptBuffer = StringBuffer();
+    if (userText.isNotEmpty) {
+      promptBuffer.writeln(userText);
+    }
+
+    if (attachedImages.length > imagesForExtraction.length ||
+        attachedFiles.length > filesForExtraction.length) {
+      if (promptBuffer.isNotEmpty) promptBuffer.writeln();
+      promptBuffer.writeln(
+        'Note: Only the first $_maxAttachmentItemsForExtraction image(s) and first $_maxAttachmentItemsForExtraction file(s) were processed to keep the app stable.',
+      );
+    }
+
+    if (extractedImageText.trim().isNotEmpty) {
+      if (promptBuffer.isNotEmpty) promptBuffer.writeln();
+      promptBuffer.writeln('Attached image OCR text:');
+      promptBuffer.writeln(extractedImageText.trim());
+    }
+
+    if (extractedFileText.trim().isNotEmpty) {
+      if (promptBuffer.isNotEmpty) promptBuffer.writeln();
+      promptBuffer.writeln('Attached file text:');
+      promptBuffer.writeln(extractedFileText.trim());
+    }
+
+    final totalContextChars = promptBuffer.toString().trim().length;
+
+    if (totalContextChars >= _attachmentWarningCharThreshold) {
+      if (!mounted) return;
+      final confirmed = await _confirmLongContextGeneration(totalContextChars);
+      if (!confirmed) return;
+    }
 
     final now = DateTime.now();
     final conversationId = _activeConversationId ?? _createConversationId();
     final activeModel = ModelCatalog.byName(_currentModel);
-    final inferencePrompt = _buildInferencePrompt(prompt);
     final maxTokens = _maxTokensForCurrentModel();
+    final userMessageText = userText.isEmpty && (attachedImages.isNotEmpty || attachedFiles.isNotEmpty)
+        ? '${[
+            if (attachedImages.isNotEmpty)
+              'Sent ${attachedImages.length} image${attachedImages.length > 1 ? 's' : ''}'
+            else
+              null,
+            if (attachedFiles.isNotEmpty)
+              'Sent ${attachedFiles.length} file${attachedFiles.length > 1 ? 's' : ''}'
+            else
+              null,
+          ].whereType<String>().join(' and ')}.'
+        : userText;
+    final imagePaths = attachedImages.map((image) => image.path).toList();
+    final filePaths = attachedFiles.map((file) => file.path).toList();
 
     setState(() {
       _activeConversationId = conversationId;
       _messages = [
         ..._messages,
         ChatMessage(
-          text: prompt,
+          text: userMessageText,
           isUser: true,
           timestamp: now,
+          imagePaths: imagePaths,
+          filePaths: filePaths,
         ),
         ChatMessage(
           text: '',
@@ -749,6 +1197,8 @@ class _ChatPageState extends State<ChatPage>
           timestamp: now,
         ),
       ];
+      _pendingImages.clear();
+      _pendingFiles.clear();
       _isGenerating = true;
       _errorText = null;
       _triggerBorderShine();
@@ -757,6 +1207,27 @@ class _ChatPageState extends State<ChatPage>
     _scheduleHistorySave();
 
     try {
+      var combinedPrompt = promptBuffer.toString().trim();
+      if (combinedPrompt.length > _maxCombinedAttachmentChars) {
+        combinedPrompt =
+            '${combinedPrompt.substring(0, _maxCombinedAttachmentChars)}\n\n[Attachment context truncated due to size.]';
+      }
+      final inferencePrompt = _buildInferencePrompt(
+        combinedPrompt.isEmpty ? userText : combinedPrompt,
+      );
+
+      // Safety check before inference to prevent model crashes from oversized context
+      if (inferencePrompt.length > _maxInferencePromptChars) {
+        if (!mounted) return;
+        setState(() {
+          _errorText = 'Context too large for safe generation. Please use a shorter prompt or fewer attachments.';
+          _messages.removeLast(); // Remove the empty assistant message we added
+          _isGenerating = false;
+          _triggerBorderShine();
+        });
+        return;
+      }
+
       final settings = _generationSettings.current;
       await for (final token in _ai.sendMessage(
         inferencePrompt,
@@ -1111,6 +1582,20 @@ class _ChatPageState extends State<ChatPage>
                     },
                     onSend: _sendPrompt,
                     onStop: _stopGenerating,
+                    pendingImages: _pendingImages,
+                    pendingFiles: _pendingFiles,
+                    onRemovePendingImage: (index) {
+                      if (index < 0 || index >= _pendingImages.length) return;
+                      setState(() {
+                        _pendingImages.removeAt(index);
+                      });
+                    },
+                    onRemovePendingFile: (index) {
+                      if (index < 0 || index >= _pendingFiles.length) return;
+                      setState(() {
+                        _pendingFiles.removeAt(index);
+                      });
+                    },
                     isInputEnabled: !_isInitializing,
                     areActionsEnabled: !_isInitializing && !_isGenerating,
                     isGenerating: _isGenerating,
@@ -1140,6 +1625,8 @@ class _ChatPageState extends State<ChatPage>
             FileUploadOverlay(
               isOpen: _isFileUploadOpen,
               onClose: () => setState(() => _isFileUploadOpen = false),
+              onImagesSelected: _handleImagesSelected,
+              onFilesSelected: _handleFilesSelected,
             ),
             ModelSelectorOverlay(
               isOpen: _isModelSelectorOpen,
@@ -1608,17 +2095,255 @@ class _ChatPageState extends State<ChatPage>
                   : (isDark ? const Color(0xFF3F3F46) : const Color(0xFFD1D5DB)),
             ),
           ),
-          child: Text(
-            message.text.isEmpty ? '...' : message.text,
-            style: TextStyle(
-              fontFamily: 'Courier',
-              fontSize: 13,
-              color: textColor,
-            ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (message.imagePaths.isNotEmpty)
+                SizedBox(
+                  height: 86,
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    scrollDirection: Axis.horizontal,
+                    itemCount: message.imagePaths.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 8),
+                    itemBuilder: (context, index) {
+                      final path = message.imagePaths[index];
+                      return GestureDetector(
+                        onTap: () => _openImageViewer(message.imagePaths, index),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: SizedBox(
+                            width: 78,
+                            height: 78,
+                            child: Image.file(
+                              File(path),
+                              fit: BoxFit.cover,
+                              cacheWidth: 240,
+                              cacheHeight: 240,
+                              filterQuality: FilterQuality.low,
+                              errorBuilder: (_, __, ___) => Container(
+                                color: isDark
+                                    ? const Color(0xFF27272A)
+                                    : const Color(0xFFE5E7EB),
+                                child: Icon(
+                                  Icons.image_not_supported_outlined,
+                                  color: textColor,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              if (message.filePaths.isNotEmpty)
+                SizedBox(
+                  height: 98,
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    scrollDirection: Axis.horizontal,
+                    itemCount: message.filePaths.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 8),
+                    itemBuilder: (context, index) {
+                      final path = message.filePaths[index];
+                      final fileName = path.split('\\').last.split('/').last;
+                      final extension = fileName.contains('.')
+                          ? fileName.split('.').last.toUpperCase()
+                          : 'FILE';
+                      return Container(
+                        width: 78,
+                        height: 90,
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: message.isUser
+                                ? userBubbleBorder
+                                : (isDark ? const Color(0xFF3F3F46) : const Color(0xFFD1D5DB)),
+                          ),
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.description_outlined,
+                              color: textColor,
+                              size: 20,
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              extension,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontFamily: 'Courier',
+                                fontSize: 8,
+                                fontWeight: FontWeight.bold,
+                                color: textColor,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              fileName,
+                              maxLines: 2,
+                              textAlign: TextAlign.center,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontFamily: 'Courier',
+                                fontSize: 8,
+                                color: textColor.withValues(alpha: 0.9),
+                                height: 1.1,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              if ((message.imagePaths.isNotEmpty || message.filePaths.isNotEmpty) &&
+                  message.text.trim().isNotEmpty)
+                const SizedBox(height: 8),
+              if (message.text.trim().isNotEmpty ||
+                  (message.imagePaths.isEmpty && message.filePaths.isEmpty))
+                message.text.isEmpty
+                    ? Text(
+                        '...',
+                        style: TextStyle(
+                          fontFamily: 'Courier',
+                          fontSize: 13,
+                          color: textColor,
+                        ),
+                      )
+                    : _buildRichMessageText(
+                        message.text,
+                        textColor,
+                        isDark: isDark,
+                      ),
+            ],
           ),
         ),
       ),
     );
+  }
+
+  Widget _buildRichMessageText(
+    String text,
+    Color textColor, {
+    required bool isDark,
+  }) {
+    return RichText(
+      text: TextSpan(
+        style: TextStyle(
+          fontFamily: 'Courier',
+          fontSize: 13,
+          color: textColor,
+          height: 1.35,
+        ),
+        children: _parseInlineSpans(text, textColor, isDark),
+      ),
+    );
+  }
+
+  List<TextSpan> _parseInlineSpans(
+    String input,
+    Color textColor,
+    bool isDark,
+  ) {
+    final spans = <TextSpan>[];
+    final matches = RegExp(
+      r'(\*\*[^\n*]+\*\*|__[^\n_]+__|`[^\n`]+`|\[[^\]]+\]\([^\)]+\)|https?://[^\s]+|\*[^\n*]+\*|_[^\n_]+_)',
+    ).allMatches(input);
+
+    var cursor = 0;
+    for (final match in matches) {
+      if (match.start > cursor) {
+        spans.add(TextSpan(text: input.substring(cursor, match.start)));
+      }
+
+      final token = match.group(0) ?? '';
+      spans.add(_spanForToken(token, textColor, isDark));
+      cursor = match.end;
+    }
+
+    if (cursor < input.length) {
+      spans.add(TextSpan(text: input.substring(cursor)));
+    }
+
+    return spans;
+  }
+
+  TextSpan _spanForToken(String token, Color textColor, bool isDark) {
+    final linkColor = isDark ? const Color(0xFF7DD3FC) : const Color(0xFF2563EB);
+    final codeBg = isDark ? const Color(0xFF27272A) : const Color(0xFFE5E7EB);
+
+    if (token.startsWith('**') && token.endsWith('**') && token.length > 4) {
+      return TextSpan(
+        text: token.substring(2, token.length - 2),
+        style: const TextStyle(fontWeight: FontWeight.bold),
+      );
+    }
+
+    if (token.startsWith('__') && token.endsWith('__') && token.length > 4) {
+      return TextSpan(
+        text: token.substring(2, token.length - 2),
+        style: const TextStyle(fontWeight: FontWeight.bold),
+      );
+    }
+
+    if (token.startsWith('`') && token.endsWith('`') && token.length > 2) {
+      return TextSpan(
+        text: token.substring(1, token.length - 1),
+        style: TextStyle(
+          fontFamily: 'Courier',
+          backgroundColor: codeBg,
+          color: textColor,
+        ),
+      );
+    }
+
+    if (token.startsWith('[') && token.contains('](') && token.endsWith(')')) {
+      final closingBracket = token.indexOf('](');
+      if (closingBracket > 1) {
+        return TextSpan(
+          text: token.substring(1, closingBracket),
+          style: TextStyle(
+            color: linkColor,
+            decoration: TextDecoration.underline,
+            decorationColor: linkColor,
+          ),
+        );
+      }
+    }
+
+    if (token.startsWith('http://') || token.startsWith('https://')) {
+      return TextSpan(
+        text: token,
+        style: TextStyle(
+          color: linkColor,
+          decoration: TextDecoration.underline,
+          decorationColor: linkColor,
+        ),
+      );
+    }
+
+    if (token.startsWith('*') && token.endsWith('*') && token.length > 2) {
+      return TextSpan(
+        text: token.substring(1, token.length - 1),
+        style: const TextStyle(fontStyle: FontStyle.italic),
+      );
+    }
+
+    if (token.startsWith('_') && token.endsWith('_') && token.length > 2) {
+      return TextSpan(
+        text: token.substring(1, token.length - 1),
+        style: const TextStyle(fontStyle: FontStyle.italic),
+      );
+    }
+
+    return TextSpan(text: token);
   }
 
   Future<void> _copyMessageToClipboard(String text) async {
@@ -1656,6 +2381,109 @@ class _ChatPageState extends State<ChatPage>
         ),
       ),
     );
+  }
+
+  int _countWords(String text) {
+    final cleaned = text.trim();
+    if (cleaned.isEmpty) return 0;
+    return cleaned.split(RegExp(r'\s+')).where((token) => token.isNotEmpty).length;
+  }
+
+  Future<bool> _confirmLongContextGeneration(int totalChars) async {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark ? Colors.black : Colors.white;
+    final subtitleColor =
+        isDark ? const Color(0xFFA1A1AA) : const Color(0xFF4B5563);
+
+    final shouldGenerate = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: bg,
+        title: const Text(
+          'GENERATE WITH LONG CONTEXT?',
+          style: TextStyle(
+            fontFamily: 'Courier',
+            letterSpacing: 2,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: Text(
+          'You are about to generate with $totalChars characters of prompt + attachment text. This may be unstable or crash the app. Do you want to continue?',
+          style: TextStyle(
+            fontFamily: 'Courier',
+            color: subtitleColor,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text(
+              'NO',
+              style: TextStyle(
+                fontFamily: 'Courier',
+                color: Colors.grey,
+                letterSpacing: 1.5,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              'YES',
+              style: TextStyle(
+                fontFamily: 'Courier',
+                color: nothingRed,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.5,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    return shouldGenerate ?? false;
+  }
+
+  Future<void> _showQueuedAttachmentWordCountSnackBar() async {
+    if (!mounted) return;
+
+    final imagesForExtraction = List<XFile>.from(_pendingImages)
+        .take(_maxAttachmentItemsForExtraction)
+        .toList();
+    final filesForExtraction = List<XFile>.from(_pendingFiles)
+        .take(_maxAttachmentItemsForExtraction)
+        .toList();
+
+    final extractedImageText = await _extractTextFromImages(imagesForExtraction);
+    final extractedFileText = await _extractTextFromFiles(filesForExtraction);
+
+    final combinedText = [
+      extractedImageText.trim(),
+      extractedFileText.trim(),
+    ].where((text) => text.isNotEmpty).join(' ');
+
+    if (!mounted) return;
+
+    final wordCount = _countWords(combinedText);
+    final hasQueue = _pendingImages.isNotEmpty || _pendingFiles.isNotEmpty;
+    final message = !hasQueue
+      ? 'Attachment queue cleared.'
+      : wordCount > _attachmentWarningWordThreshold
+        ? 'App might crash or be unstable due to no context left.'
+        : wordCount > 0
+          ? 'Attachment queue has $wordCount word${wordCount == 1 ? '' : 's'} total.'
+          : 'Attachment queue added, but no extractable words were found.';
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          duration: const Duration(seconds: 4),
+        ),
+      );
   }
 }
 

@@ -6,22 +6,30 @@ class ChatMessage {
   final String text;
   final bool isUser;
   final DateTime timestamp;
+  final List<String> imagePaths;
+  final List<String> filePaths;
 
   const ChatMessage({
     required this.text,
     required this.isUser,
     required this.timestamp,
+    this.imagePaths = const [],
+    this.filePaths = const [],
   });
 
   ChatMessage copyWith({
     String? text,
     bool? isUser,
     DateTime? timestamp,
+    List<String>? imagePaths,
+    List<String>? filePaths,
   }) {
     return ChatMessage(
       text: text ?? this.text,
       isUser: isUser ?? this.isUser,
       timestamp: timestamp ?? this.timestamp,
+      imagePaths: imagePaths ?? this.imagePaths,
+      filePaths: filePaths ?? this.filePaths,
     );
   }
 
@@ -29,15 +37,26 @@ class ChatMessage {
         'text': text,
         'isUser': isUser,
         'timestamp': timestamp.toIso8601String(),
+      'imagePaths': imagePaths,
+      'filePaths': filePaths,
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
+    final parsedImagePaths = (json['imagePaths'] as List<dynamic>? ?? const [])
+        .whereType<String>()
+        .toList();
+    final parsedFilePaths = (json['filePaths'] as List<dynamic>? ?? const [])
+        .whereType<String>()
+        .toList();
+
     return ChatMessage(
       text: json['text'] as String? ?? '',
       isUser: json['isUser'] as bool? ?? false,
       timestamp:
           DateTime.tryParse(json['timestamp'] as String? ?? '') ??
               DateTime.now(),
+      imagePaths: parsedImagePaths,
+      filePaths: parsedFilePaths,
     );
   }
 }

@@ -1,19 +1,24 @@
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:image_picker/image_picker.dart';
 
 class FileUploadOverlay extends StatelessWidget {
   final bool isOpen;
   final VoidCallback onClose;
+  final Function(List<XFile>)? onImagesSelected;
+  final Function(List<XFile>)? onFilesSelected;
 
   const FileUploadOverlay({
     super.key,
     required this.isOpen,
     required this.onClose,
+    this.onImagesSelected,
+    this.onFilesSelected,
   });
 
   static const _options = [
     {'icon': 'camera', 'label': 'CAMERA'},
-    {'icon': 'gallery', 'label': 'GALLERY'},
-    {'icon': 'document', 'label': 'DOCUMENT'},
+    {'icon': 'photos', 'label': 'PHOTOS'},
     {'icon': 'files', 'label': 'FILES'},
   ];
 
@@ -21,10 +26,8 @@ class FileUploadOverlay extends StatelessWidget {
     switch (key) {
       case 'camera':
         return Icons.camera_alt_outlined;
-      case 'gallery':
+      case 'photos':
         return Icons.image_outlined;
-      case 'document':
-        return Icons.description_outlined;
       case 'files':
         return Icons.folder_outlined;
       default:
@@ -57,7 +60,7 @@ class FileUploadOverlay extends StatelessWidget {
             child: GestureDetector(
               onTap: onClose,
               child: Container(
-                color: Colors.black.withOpacity(0.4),
+                color: Colors.black.withValues(alpha: 0.4),
               ),
             ),
           ),
@@ -91,7 +94,7 @@ class FileUploadOverlay extends StatelessWidget {
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 40),
+                  padding: const EdgeInsets.fromLTRB(35, 0, 35, 40),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -107,18 +110,27 @@ class FileUploadOverlay extends StatelessWidget {
                       ),
                       const SizedBox(height: 32),
                       Row(
-                        mainAxisAlignment:
-                            MainAxisAlignment.spaceBetween,
-                        children: _options.map((opt) {
-                          return _UploadOption(
-                            icon: _iconFor(opt['icon']!),
-                            label: opt['label']!,
-                            circleIconColor: circleIconColor,
-                            labelColor: labelColor,
-                            borderColor: borderColor,
-                            isDark: isDark,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: List.generate(_options.length, (index) {
+                          final opt = _options[index];
+                          return Padding(
+                            padding: EdgeInsets.only(
+                              right: index == _options.length - 1 ? 0 : 24,
+                            ),
+                            child: _UploadOption(
+                              icon: _iconFor(opt['icon']!),
+                              label: opt['label']!,
+                              optionKey: opt['icon']!,
+                              circleIconColor: circleIconColor,
+                              labelColor: labelColor,
+                              borderColor: borderColor,
+                              isDark: isDark,
+                              onImagesSelected: onImagesSelected,
+                              onFilesSelected: onFilesSelected,
+                              onClose: onClose,
+                            ),
                           );
-                        }).toList(),
+                        }),
                       ),
                     ],
                   ),
@@ -135,24 +147,74 @@ class FileUploadOverlay extends StatelessWidget {
 class _UploadOption extends StatelessWidget {
   final IconData icon;
   final String label;
+  final String optionKey;
   final Color circleIconColor;
   final Color labelColor;
   final Color borderColor;
   final bool isDark;
+  final Function(List<XFile>)? onImagesSelected;
+  final Function(List<XFile>)? onFilesSelected;
+  final VoidCallback? onClose;
 
   const _UploadOption({
     required this.icon,
     required this.label,
+    required this.optionKey,
     required this.circleIconColor,
     required this.labelColor,
     required this.borderColor,
     required this.isDark,
+    this.onImagesSelected,
+    this.onFilesSelected,
+    this.onClose,
   });
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () {},
+      onTap: () async {
+        if (optionKey == 'camera') {
+          final picker = ImagePicker();
+          final image = await picker.pickImage(
+            source: ImageSource.camera,
+            imageQuality: 85,
+          );
+          if (image != null) {
+            onImagesSelected?.call([image]);
+            onClose?.call();
+          }
+        } else if (optionKey == 'photos') {
+          final picker = ImagePicker();
+          final images = await picker.pickMultiImage();
+          if (images.isNotEmpty) {
+            onImagesSelected?.call(images);
+            onClose?.call();
+          }
+        } else if (optionKey == 'files') {
+          final result = await FilePicker.platform.pickFiles(
+            allowMultiple: true,
+            type: FileType.custom,
+            allowedExtensions: const [
+              'pdf',
+              'docx',
+              'txt',
+              'md',
+              'csv',
+              'json',
+              'xml',
+              'html',
+              'htm',
+              'log',
+              'rtf',
+            ],
+          );
+          final files = result?.xFiles ?? const <XFile>[];
+          if (files.isNotEmpty) {
+            onFilesSelected?.call(files);
+            onClose?.call();
+          }
+        }
+      },
       child: Column(
         children: [
           Container(
