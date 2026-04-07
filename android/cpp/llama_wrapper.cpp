@@ -32,6 +32,12 @@ struct LlamaContextWrapper {
 static size_t find_first_stop_marker(const std::string & text) {
     static const char * kStopMarkers[] = {
         "<|end|>",
+        "<|end|",
+        "<|end",
+        "<|user",
+        "<|assistant",
+        "<|im_start|>user",
+        "<|im_start|>assistant",
         "\nUser\n",
         "\nuser\n",
         "\nUser:",

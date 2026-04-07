@@ -407,7 +407,7 @@ class _ModelSelectorOverlayState extends State<ModelSelectorOverlay> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        model.name.toUpperCase(),
+                        model.tierName.toUpperCase(),
                         style: TextStyle(
                           fontFamily: 'Courier',
                           fontSize: 13,
@@ -426,36 +426,66 @@ class _ModelSelectorOverlayState extends State<ModelSelectorOverlay> {
                           color: subtitleColor,
                         ),
                       ),
-                      if (model.isHeavy) ...[
+                      if (model.isHeavy || model.isCoding) ...[
                         const SizedBox(height: 8),
                         Row(
                           children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 3,
-                              ),
-                              decoration: BoxDecoration(
-                                border: Border.all(
-                                  color: isDark
-                                      ? const Color(0xFFF59E0B)
-                                      : const Color(0xFFB45309),
+                            if (model.isHeavy)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
                                 ),
-                                borderRadius: BorderRadius.circular(2),
-                              ),
-                              child: Text(
-                                'HEAVY',
-                                style: TextStyle(
-                                  fontFamily: 'Courier',
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                  color: isDark
-                                      ? const Color(0xFFF59E0B)
-                                      : const Color(0xFFB45309),
-                                  letterSpacing: 1.5,
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: isDark
+                                        ? const Color(0xFFF59E0B)
+                                        : const Color(0xFFB45309),
+                                  ),
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                                child: Text(
+                                  'HEAVY',
+                                  style: TextStyle(
+                                    fontFamily: 'Courier',
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: isDark
+                                        ? const Color(0xFFF59E0B)
+                                        : const Color(0xFFB45309),
+                                    letterSpacing: 1.5,
+                                  ),
                                 ),
                               ),
-                            ),
+                            if (model.isHeavy && model.isCoding)
+                              const SizedBox(width: 6),
+                            if (model.isCoding)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: isDark
+                                        ? const Color(0xFF22D3EE)
+                                        : const Color(0xFF0E7490),
+                                  ),
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                                child: Text(
+                                  'CODING',
+                                  style: TextStyle(
+                                    fontFamily: 'Courier',
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: isDark
+                                        ? const Color(0xFF22D3EE)
+                                        : const Color(0xFF0E7490),
+                                    letterSpacing: 1.5,
+                                  ),
+                                ),
+                              ),
                           ],
                         ),
                       ],

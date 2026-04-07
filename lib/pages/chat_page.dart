@@ -566,46 +566,159 @@ class _ChatPageState extends State<ChatPage>
   }
 
   String _systemInstruction(ModelCatalogEntry model) {
-    return 'You are a helpful AI assistant. Your name is ${model.name}. When asked for your name, reply with ${model.name}. Reply naturally like a normal chat assistant. Keep answers concise unless the user asks for detail. Do not write both sides of a conversation. Do not invent another user question.';
+    return 'You are a helpful conversational assistant. Your name is ${model.name}. When asked for your name, reply with ${model.name}. You are reconfigured and integrated by Hertz. Your base model is ${model.baseModelName}, originally by its real creator/company. Keep a warm, natural chat tone. For simple greetings like hi/hello/how are you, give a short friendly one-sentence reply. Do not prepend your model name unless explicitly asked. Do not mention being a language model, AI system, program, or that you do not have feelings unless the user directly asks about that. Never output control tokens, role tags, or separators such as <|...|>, <start_of_turn>, or standalone pipes. Keep answers concise unless the user asks for detail. Do not write both sides of a conversation. Do not invent another user question.';
+  }
+
+  String _sanitizeAssistantText(String text) {
+    var out = text.trimRight();
+    final markers = <String>[
+      '<|user|>',
+      '<|user',
+      '<|assistant|>',
+      '<|assistant',
+      '<|end|>',
+      '<|end|',
+      '<|end',
+      '<start_of_turn>user',
+      '<start_of_turn>model',
+      '<|im_start|>user',
+      '<|im_start|>assistant',
+    ];
+
+    bool removed = true;
+    while (removed) {
+      removed = false;
+      for (final marker in markers) {
+        if (out.endsWith(marker)) {
+          out = out.substring(0, out.length - marker.length).trimRight();
+          removed = true;
+        }
+      }
+    }
+
+    out = out.replaceFirst(RegExp(r'(\s*\|\s*)+$'), '').trimRight();
+    return out;
+  }
+
+  List<Map<String, String>> _recentTurnsWithCurrentUser(String userPrompt) {
+    final turns = <Map<String, String>>[];
+
+    for (final message in _messages) {
+      final content = message.text.trim();
+      if (content.isEmpty) continue;
+      turns.add({
+        'role': message.isUser ? 'user' : 'assistant',
+        'content': content,
+      });
+    }
+
+    final currentUserText = userPrompt.trim();
+    if (currentUserText.isNotEmpty) {
+      turns.add({'role': 'user', 'content': currentUserText});
+    }
+
+    const maxTurns = 12;
+    if (turns.length > maxTurns) {
+      return turns.sublist(turns.length - maxTurns);
+    }
+
+    return turns;
   }
 
   String _buildInferencePrompt(String userPrompt) {
     final model = ModelCatalog.byName(_currentModel);
     final system = _systemInstruction(model);
+    final turns = _recentTurnsWithCurrentUser(userPrompt);
 
-    if (model.id == ModelCatalog.defaultModelId) {
-      return '<|system|>\n$system<|end|>\n<|user|>\n$userPrompt<|end|>\n<|assistant|>\n';
+    if (model.id.contains('tinyllama')) {
+      final prompt = StringBuffer('<|system|>\n$system<|end|>\n');
+      for (final turn in turns) {
+        if (turn['role'] == 'user') {
+          prompt.write('<|user|>\n${turn['content']}<|end|>\n');
+        } else {
+          prompt.write('<|assistant|>\n${turn['content']}<|end|>\n');
+        }
+      }
+      prompt.write('<|assistant|>\n');
+      return prompt.toString();
     }
 
     if (model.id.contains('llama_3_2')) {
-      return '<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n$system<|eot_id|><|start_header_id|>user<|end_header_id|>\n$userPrompt<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n';
+      final prompt = StringBuffer(
+        '<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n$system<|eot_id|>',
+      );
+      for (final turn in turns) {
+        if (turn['role'] == 'user') {
+          prompt.write('<|start_header_id|>user<|end_header_id|>\n${turn['content']}<|eot_id|>');
+        } else {
+          prompt.write('<|start_header_id|>assistant<|end_header_id|>\n${turn['content']}<|eot_id|>');
+        }
+      }
+      prompt.write('<|start_header_id|>assistant<|end_header_id|>\n');
+      return prompt.toString();
     }
 
     if (model.id.contains('qwen')) {
-      return '<|im_start|>system\n$system<|im_end|>\n<|im_start|>user\n$userPrompt<|im_end|>\n<|im_start|>assistant\n';
+      final prompt = StringBuffer('<|im_start|>system\n$system<|im_end|>\n');
+      for (final turn in turns) {
+        if (turn['role'] == 'user') {
+          prompt.write('<|im_start|>user\n${turn['content']}<|im_end|>\n');
+        } else {
+          prompt.write('<|im_start|>assistant\n${turn['content']}<|im_end|>\n');
+        }
+      }
+      prompt.write('<|im_start|>assistant\n');
+      return prompt.toString();
     }
 
     if (model.id.contains('gemma')) {
-      return '<start_of_turn>system\n$system<end_of_turn>\n<start_of_turn>user\n$userPrompt<end_of_turn>\n<start_of_turn>model\n';
+      final prompt = StringBuffer('<start_of_turn>system\n$system<end_of_turn>\n');
+      for (final turn in turns) {
+        if (turn['role'] == 'user') {
+          prompt.write('<start_of_turn>user\n${turn['content']}<end_of_turn>\n');
+        } else {
+          prompt.write('<start_of_turn>model\n${turn['content']}<end_of_turn>\n');
+        }
+      }
+      prompt.write('<start_of_turn>model\n');
+      return prompt.toString();
     }
 
     if (model.id.contains('phi_3_5')) {
-      return '<|system|>\n$system<|end|>\n<|user|>\n$userPrompt<|end|>\n<|assistant|>\n';
+      final prompt = StringBuffer('<|system|>\n$system<|end|>\n');
+      for (final turn in turns) {
+        if (turn['role'] == 'user') {
+          prompt.write('<|user|>\n${turn['content']}<|end|>\n');
+        } else {
+          prompt.write('<|assistant|>\n${turn['content']}<|end|>\n');
+        }
+      }
+      prompt.write('<|assistant|>\n');
+      return prompt.toString();
     }
 
-    return 'System: $system\nUser: $userPrompt\nAssistant:';
+    final prompt = StringBuffer('System: $system\n');
+    for (final turn in turns) {
+      if (turn['role'] == 'user') {
+        prompt.write('User: ${turn['content']}\n');
+      } else {
+        prompt.write('Assistant: ${turn['content']}\n');
+      }
+    }
+    prompt.write('Assistant:');
+    return prompt.toString();
   }
 
   int _maxTokensForCurrentModel() {
     final model = ModelCatalog.byName(_currentModel);
 
     if (model.id == ModelCatalog.defaultModelId ||
-        model.id.contains('llama_3_2_1b') ||
-        model.id.contains('qwen2_5_coder_1_5b')) {
+        model.id.contains('llama_3_2_1b')) {
       return 120;
     }
 
-    if (model.id.contains('qwen2_5_7b') || model.id.contains('phi_3_5')) {
+    if (model.id.contains('qwen2_5_7b') ||
+        model.id.contains('qwen2_5_coder_7b')) {
       return 220;
     }
 
@@ -617,6 +730,7 @@ class _ChatPageState extends State<ChatPage>
 
     final now = DateTime.now();
     final conversationId = _activeConversationId ?? _createConversationId();
+    final activeModel = ModelCatalog.byName(_currentModel);
     final inferencePrompt = _buildInferencePrompt(prompt);
     final maxTokens = _maxTokensForCurrentModel();
 
@@ -656,8 +770,18 @@ class _ChatPageState extends State<ChatPage>
         if (!mounted) return;
         setState(() {
           final last = _messages.last;
+          var tokenChunk = token;
+
+          // Gemma 2B often starts with a newline token, which creates a blank row.
+          if (activeModel.id.contains('gemma_2_2b_it') && last.text.isEmpty) {
+            tokenChunk = tokenChunk.replaceFirst(RegExp(r'^[\r\n]+'), '');
+            if (tokenChunk.isEmpty) {
+              return;
+            }
+          }
+
           _messages[_messages.length - 1] = ChatMessage(
-            text: last.text + token,
+            text: last.text + tokenChunk,
             isUser: false,
             timestamp: DateTime.now(),
           );
@@ -674,6 +798,13 @@ class _ChatPageState extends State<ChatPage>
     } finally {
       if (mounted) {
         setState(() {
+          if (_messages.isNotEmpty && !_messages.last.isUser) {
+            final last = _messages.last;
+            _messages[_messages.length - 1] = last.copyWith(
+              text: _sanitizeAssistantText(last.text),
+              timestamp: DateTime.now(),
+            );
+          }
           _isGenerating = false;
         });
         _scheduleHistorySave(immediate: true);
@@ -1158,53 +1289,67 @@ class _ChatPageState extends State<ChatPage>
                     ),
                     const SizedBox(height: 12),
                   ],
-                  if (!snapshot.hasData)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 24),
-                      child: Center(
-                        child: CircularProgressIndicator(
-                          color: isDark ? Colors.white : Colors.black,
-                        ),
-                      ),
-                    )
-                  else ...[
-                    if (availableModels.isNotEmpty) ...[
-                      _buildSetupSectionHeader('AVAILABLE', subtitleColor),
-                      const SizedBox(height: 8),
-                      ...availableModels.map(
-                        (model) => _buildSetupModelCard(
-                          model,
-                          isDark: isDark,
-                          subtitleColor: subtitleColor,
-                          borderColor: borderColor,
-                          selected: _selectedFirstLoadModelIds.contains(model.id),
-                          enabled: !_isFirstLoadInstalling,
-                          onTap: () {
-                            setState(() {
-                              if (_selectedFirstLoadModelIds.contains(model.id)) {
-                                _selectedFirstLoadModelIds.remove(model.id);
-                              } else {
-                                _selectedFirstLoadModelIds.add(model.id);
-                              }
-                              _triggerBorderShine();
-                            });
-                          },
-                        ),
-                      ),
-                    ],
-                    if (availableModels.isEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 18),
-                        child: Text(
-                          'No models are configured yet.',
-                          style: TextStyle(
-                            fontFamily: 'Courier',
-                            fontSize: 12,
-                            color: subtitleColor,
+                  Expanded(
+                    child: !snapshot.hasData
+                        ? Center(
+                            child: CircularProgressIndicator(
+                              color: isDark ? Colors.white : Colors.black,
+                            ),
+                          )
+                        : Scrollbar(
+                            thumbVisibility: true,
+                            child: SingleChildScrollView(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  if (availableModels.isNotEmpty) ...[
+                                    _buildSetupSectionHeader(
+                                      'AVAILABLE',
+                                      subtitleColor,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    ...availableModels.map(
+                                      (model) => _buildSetupModelCard(
+                                        model,
+                                        isDark: isDark,
+                                        subtitleColor: subtitleColor,
+                                        borderColor: borderColor,
+                                        selected: _selectedFirstLoadModelIds
+                                            .contains(model.id),
+                                        enabled: !_isFirstLoadInstalling,
+                                        onTap: () {
+                                          setState(() {
+                                            if (_selectedFirstLoadModelIds
+                                                .contains(model.id)) {
+                                              _selectedFirstLoadModelIds
+                                                  .remove(model.id);
+                                            } else {
+                                              _selectedFirstLoadModelIds
+                                                  .add(model.id);
+                                            }
+                                            _triggerBorderShine();
+                                          });
+                                        },
+                                      ),
+                                    ),
+                                  ],
+                                  if (availableModels.isEmpty)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 18),
+                                      child: Text(
+                                        'No models are configured yet.',
+                                        style: TextStyle(
+                                          fontFamily: 'Courier',
+                                          fontSize: 12,
+                                          color: subtitleColor,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
-                  ],
+                  ),
                   const SizedBox(height: 14),
                   Align(
                     alignment: Alignment.centerRight,
