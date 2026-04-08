@@ -67,9 +67,6 @@ The app is branded as Hertz and is designed as an offline-capable chat experienc
 - lib/services/llm_ffi.dart - FFI bindings to native inference APIs
 - android/cpp/llama_wrapper.cpp - native llama.cpp wrapper implementation
 - android/cpp/CMakeLists.txt - native build configuration
-- QUICK_START.md - fast setup and first build path
-- LLM_BACKEND_GUIDE.md - architecture and backend details
-- TROUBLESHOOTING.md - build/runtime issue resolution
 
 ## How to Run
 
@@ -78,11 +75,8 @@ The app is branded as Hertz and is designed as an offline-capable chat experienc
 3. Install dependencies:
 	- flutter pub get
 4. Build and run:
-	- flutter run
-	- or flutter build apk --release
+	- flutter build apk --release
 5. Launch Hertz, download/select a model, then start chatting.
-
-For full setup details, see QUICK_START.md.
 
 ## Current Runtime Notes
 
