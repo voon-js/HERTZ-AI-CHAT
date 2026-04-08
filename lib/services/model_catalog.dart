@@ -123,16 +123,16 @@ class ModelCatalog {
     ModelCatalogEntry(
       id: 'qwen2_5_8b_instruct_q4',
       name: 'Hertz Apex',
-      baseModelName: 'Qwen2.5-8B-Instruct',
-      filename: 'Qwen2.5-8B-Instruct-Q4_K_M.gguf',
+      baseModelName: 'Qwen2.5-7B-Instruct',
+      filename: 'Qwen2.5-7B-Instruct-Q5_K_M.gguf',
       url:
-          'https://huggingface.co/bartowski/Qwen2.5-8B-Instruct-GGUF/resolve/main/Qwen2.5-8B-Instruct-Q4_K_M.gguf',
+          'https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q5_K_M.gguf',
       description:
-          'Best-performing 8B general model for the strongest phone-friendly quality',
+          'Top-quality high-precision 7B profile for the strongest Hertz chat quality',
       isHeavy: true,
-      modelSize: '5.16 GB',
-      quantization: 'Q4_K_M',
-      parameters: '8B',
+      modelSize: '5.43 GB',
+      quantization: 'Q5_K_M',
+      parameters: '7B',
       contextTokens: '128K token context window',
       recommendedRam: '10-12 GB free',
     ),
