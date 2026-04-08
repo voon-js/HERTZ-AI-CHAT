@@ -7,6 +7,7 @@ class GenerationSettings {
   final double minP;
   final double repeatPenalty;
   final int maxTokens;
+  final int contextChars;
 
   const GenerationSettings({
     this.temperature = 0.7,
@@ -15,6 +16,7 @@ class GenerationSettings {
     this.minP = 0.05,
     this.repeatPenalty = 1.12,
     this.maxTokens = 180,
+    this.contextChars = 5000,
   });
 
   GenerationSettings copyWith({
@@ -24,6 +26,7 @@ class GenerationSettings {
     double? minP,
     double? repeatPenalty,
     int? maxTokens,
+    int? contextChars,
   }) {
     return GenerationSettings(
       temperature: temperature ?? this.temperature,
@@ -32,6 +35,7 @@ class GenerationSettings {
       minP: minP ?? this.minP,
       repeatPenalty: repeatPenalty ?? this.repeatPenalty,
       maxTokens: maxTokens ?? this.maxTokens,
+      contextChars: contextChars ?? this.contextChars,
     );
   }
 
@@ -42,6 +46,7 @@ class GenerationSettings {
         'minP': minP,
         'repeatPenalty': repeatPenalty,
         'maxTokens': maxTokens,
+        'contextChars': contextChars,
       };
 
   factory GenerationSettings.fromJson(Map<String, dynamic> json) {
@@ -52,6 +57,7 @@ class GenerationSettings {
       minP: (json['minP'] as num?)?.toDouble() ?? 0.05,
       repeatPenalty: (json['repeatPenalty'] as num?)?.toDouble() ?? 1.12,
       maxTokens: (json['maxTokens'] as int?) ?? 180,
+      contextChars: (json['contextChars'] as int?) ?? 5000,
     );
   }
 
@@ -62,6 +68,7 @@ class GenerationSettings {
     minP: 0.05,
     repeatPenalty: 1.12,
     maxTokens: 180,
+    contextChars: 5000,
   );
 
   static const GenerationSettings conservative = GenerationSettings(
@@ -71,6 +78,7 @@ class GenerationSettings {
     minP: 0.1,
     repeatPenalty: 1.2,
     maxTokens: 140,
+    contextChars: 3500,
   );
 
   static const GenerationSettings creative = GenerationSettings(
@@ -80,6 +88,7 @@ class GenerationSettings {
     minP: 0.02,
     repeatPenalty: 1.05,
     maxTokens: 220,
+    contextChars: 5000,
   );
 
   static const GenerationSettings precise = GenerationSettings(
@@ -89,6 +98,7 @@ class GenerationSettings {
     minP: 0.15,
     repeatPenalty: 1.25,
     maxTokens: 160,
+    contextChars: 4000,
   );
 
   static const Map<String, GenerationSettings> presets = {
@@ -113,32 +123,41 @@ class GenerationSettingsService {
 
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
-    final jsonStr = prefs.getString(_prefsKey);
+    final hasSavedSettings =
+        prefs.containsKey('${_prefsKey}_temp') ||
+        prefs.containsKey('${_prefsKey}_topP') ||
+        prefs.containsKey('${_prefsKey}_topK') ||
+        prefs.containsKey('${_prefsKey}_minP') ||
+        prefs.containsKey('${_prefsKey}_repeatPenalty') ||
+        prefs.containsKey('${_prefsKey}_maxTokens') ||
+        prefs.containsKey('${_prefsKey}_contextChars');
 
-    if (jsonStr != null) {
-      try {
-        final json = jsonStr.split(',').asMap().entries.fold<Map<String, dynamic>>({}, (map, entry) {
-          final parts = entry.value.split('=');
-          if (parts.length == 2) {
-            map[parts[0]] = parts[1];
-          }
-          return map;
-        });
+    if (!hasSavedSettings) {
+      _current = GenerationSettings.balanced;
+      return;
+    }
 
-        final decoded = <String, dynamic>{};
-        decoded['temperature'] = double.tryParse(prefs.getString('${_prefsKey}_temp') ?? '0.7');
-        decoded['topP'] = double.tryParse(prefs.getString('${_prefsKey}_topP') ?? '0.9');
-        decoded['topK'] = int.tryParse(prefs.getString('${_prefsKey}_topK') ?? '40');
-        decoded['minP'] = double.tryParse(prefs.getString('${_prefsKey}_minP') ?? '0.05');
-        decoded['repeatPenalty'] = double.tryParse(prefs.getString('${_prefsKey}_repeatPenalty') ?? '1.12');
-        decoded['maxTokens'] = int.tryParse(prefs.getString('${_prefsKey}_maxTokens') ?? '180');
-
-        if (decoded.values.every((v) => v != null)) {
-          _current = GenerationSettings.fromJson(decoded.cast());
-        }
-      } catch (_) {
-        _current = GenerationSettings.balanced;
-      }
+    try {
+      _current = GenerationSettings(
+        temperature: double.tryParse(prefs.getString('${_prefsKey}_temp') ?? '') ??
+            GenerationSettings.balanced.temperature,
+        topP: double.tryParse(prefs.getString('${_prefsKey}_topP') ?? '') ??
+            GenerationSettings.balanced.topP,
+        topK: int.tryParse(prefs.getString('${_prefsKey}_topK') ?? '') ??
+            GenerationSettings.balanced.topK,
+        minP: double.tryParse(prefs.getString('${_prefsKey}_minP') ?? '') ??
+            GenerationSettings.balanced.minP,
+        repeatPenalty:
+            double.tryParse(prefs.getString('${_prefsKey}_repeatPenalty') ?? '') ??
+                GenerationSettings.balanced.repeatPenalty,
+        maxTokens: int.tryParse(prefs.getString('${_prefsKey}_maxTokens') ?? '') ??
+            GenerationSettings.balanced.maxTokens,
+        contextChars:
+            int.tryParse(prefs.getString('${_prefsKey}_contextChars') ?? '') ??
+                GenerationSettings.balanced.contextChars,
+      );
+    } catch (_) {
+      _current = GenerationSettings.balanced;
     }
   }
 
@@ -153,6 +172,7 @@ class GenerationSettingsService {
       prefs.setString('${_prefsKey}_minP', settings.minP.toString()),
       prefs.setString('${_prefsKey}_repeatPenalty', settings.repeatPenalty.toString()),
       prefs.setString('${_prefsKey}_maxTokens', settings.maxTokens.toString()),
+      prefs.setString('${_prefsKey}_contextChars', settings.contextChars.toString()),
     ]);
   }
 

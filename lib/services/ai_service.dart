@@ -28,6 +28,7 @@ class AIService {
   bool _isModelInitialized = false;
   String? _initializedModelName;
   bool _isGeneratingInWorker = false;
+  int? _activeGenerationId;
   int _requestId = 0;
 
   final Map<int, StreamController<String>> _generationControllers = {};
@@ -153,6 +154,7 @@ class AIService {
 
     _generationControllers[id] = controller;
     _isGeneratingInWorker = true;
+    _activeGenerationId = id;
 
     _workerCommandPort!.send({
       'type': 'generate',
@@ -169,14 +171,32 @@ class AIService {
     try {
       yield* controller.stream;
     } finally {
-      _isGeneratingInWorker = false;
       _generationControllers.remove(id);
+      if (_activeGenerationId == id) {
+        _activeGenerationId = null;
+        _isGeneratingInWorker = false;
+      }
     }
   }
 
   void stopGenerating() {
     if (!_isGeneratingInWorker) return;
-    _workerLlm.stopGeneration();
+
+    final activeId = _activeGenerationId;
+    if (activeId != null) {
+      final controller = _generationControllers[activeId];
+      if (controller != null && !controller.isClosed) {
+        controller.close();
+      }
+      _generationControllers.remove(activeId);
+      _activeGenerationId = null;
+    }
+
+    _isGeneratingInWorker = false;
+
+    if (_workerCommandPort != null) {
+      _workerCommandPort!.send({'type': 'stop'});
+    }
   }
 
   void dispose() {
@@ -237,7 +257,10 @@ class AIService {
           controller.close();
         }
         _generationControllers.remove(id);
-        _isGeneratingInWorker = false;
+        if (_activeGenerationId == id) {
+          _activeGenerationId = null;
+          _isGeneratingInWorker = false;
+        }
         return;
       }
 
@@ -256,7 +279,10 @@ class AIService {
           controller.close();
         }
         _generationControllers.remove(id);
-        _isGeneratingInWorker = false;
+        if (_activeGenerationId == id) {
+          _activeGenerationId = null;
+          _isGeneratingInWorker = false;
+        }
       }
     });
 
@@ -408,6 +434,13 @@ class AIService {
           _workerBusy = false;
           _workerActiveRequestId = -1;
           hostSendPort.send({'type': 'done', 'id': id});
+          return;
+        }
+
+        if (type == 'stop') {
+          if (_workerBusy) {
+            _workerLlm.stopGeneration();
+          }
           return;
         }
       } catch (e) {

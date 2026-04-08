@@ -58,7 +58,7 @@ class _MyAppState extends State<MyApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'hertz',
+      title: 'Hertz',
       debugShowCheckedModeBanner: false,
       themeMode: _themeMode,
       theme: AppTheme.light,

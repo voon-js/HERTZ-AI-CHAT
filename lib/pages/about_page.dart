@@ -69,7 +69,7 @@ class AboutPage extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'HERTZ AI CHAT',
+                            'Hertz',
                             style: TextStyle(
                               fontFamily: 'Courier',
                               fontSize: 18,

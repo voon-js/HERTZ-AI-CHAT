@@ -71,9 +71,10 @@ class _ChatPageState extends State<ChatPage>
   static const int _maxExtractedChunkChars = 4000;
   static const int _maxCombinedAttachmentChars = 12000;
   static const int _maxUserPromptChars = 2000;
-  static const int _maxInferencePromptChars = 5000;
-  static const int _attachmentWarningWordThreshold = 60;
-  static const int _attachmentWarningCharThreshold = 470;
+  static const int _defaultMaxInferencePromptChars = 2000;
+  static const int _currentPromptWarningChars = 1450;
+  static const int _totalContextWarningChars = 2100;
+  bool _skipContextAlmostFullWarningForSession = false;
 
   static const String _firstLoadDoneKey = 'first_time_setup_done_v2';
   static const String _activeModelIdKey = 'active_model_id_v2';
@@ -709,16 +710,21 @@ class _ChatPageState extends State<ChatPage>
     return out;
   }
 
-  List<Map<String, String>> _recentTurnsWithCurrentUser(String userPrompt) {
+  List<Map<String, String>> _recentTurnsWithCurrentUser(
+    String userPrompt, {
+    required bool includeHistory,
+  }) {
     final turns = <Map<String, String>>[];
 
-    for (final message in _messages) {
-      final content = message.text.trim();
-      if (content.isEmpty) continue;
-      turns.add({
-        'role': message.isUser ? 'user' : 'assistant',
-        'content': content,
-      });
+    if (includeHistory) {
+      for (final message in _messages) {
+        final content = message.text.trim();
+        if (content.isEmpty) continue;
+        turns.add({
+          'role': message.isUser ? 'user' : 'assistant',
+          'content': content,
+        });
+      }
     }
 
     final currentUserText = userPrompt.trim();
@@ -734,10 +740,13 @@ class _ChatPageState extends State<ChatPage>
     return turns;
   }
 
-  String _buildInferencePrompt(String userPrompt) {
+  String _buildInferencePrompt(String userPrompt, {bool includeHistory = true}) {
     final model = ModelCatalog.byName(_currentModel);
     final system = _systemInstruction(model);
-    final turns = _recentTurnsWithCurrentUser(userPrompt);
+    final turns = _recentTurnsWithCurrentUser(
+      userPrompt,
+      includeHistory: includeHistory,
+    );
 
     if (model.id.contains('tinyllama')) {
       final prompt = StringBuffer('<|system|>\n$system<|end|>\n');
@@ -841,7 +850,7 @@ class _ChatPageState extends State<ChatPage>
       _isFileUploadOpen = false;
     });
 
-    unawaited(_showQueuedAttachmentWordCountSnackBar());
+    unawaited(_showQueuedAttachmentContextSnackBar());
   }
 
   void _handleFilesSelected(List<XFile> files) {
@@ -851,7 +860,7 @@ class _ChatPageState extends State<ChatPage>
       _isFileUploadOpen = false;
     });
 
-    unawaited(_showQueuedAttachmentWordCountSnackBar());
+    unawaited(_showQueuedAttachmentContextSnackBar());
   }
 
   void _openImageViewer(List<String> imagePaths, int initialIndex) {
@@ -1153,11 +1162,27 @@ class _ChatPageState extends State<ChatPage>
       promptBuffer.writeln(extractedFileText.trim());
     }
 
-    final totalContextChars = promptBuffer.toString().trim().length;
+    var combinedPrompt = promptBuffer.toString().trim();
+    if (combinedPrompt.length > _maxCombinedAttachmentChars) {
+      combinedPrompt =
+          '${combinedPrompt.substring(0, _maxCombinedAttachmentChars)}\n\n[Attachment context truncated due to size.]';
+    }
+    final promptForChecks = combinedPrompt.isEmpty ? userText : combinedPrompt;
+    final currentPromptChars = _buildInferencePrompt(
+      promptForChecks,
+      includeHistory: false,
+    ).length;
+    final totalContextChars = _buildInferencePrompt(promptForChecks).length;
 
-    if (totalContextChars >= _attachmentWarningCharThreshold) {
+    if (totalContextChars > _totalContextWarningChars) {
       if (!mounted) return;
-      final confirmed = await _confirmLongContextGeneration(totalContextChars);
+      if (!_skipContextAlmostFullWarningForSession) {
+        final confirmed = await _confirmContextAlmostFullGeneration(totalContextChars);
+        if (!confirmed) return;
+      }
+    } else if (currentPromptChars > _currentPromptWarningChars) {
+      if (!mounted) return;
+      final confirmed = await _confirmLargeCurrentPromptGeneration(currentPromptChars);
       if (!confirmed) return;
     }
 
@@ -1216,11 +1241,17 @@ class _ChatPageState extends State<ChatPage>
         combinedPrompt.isEmpty ? userText : combinedPrompt,
       );
 
+      final settings = _generationSettings.current;
+      final maxInferencePromptChars = settings.contextChars <= 0
+          ? _defaultMaxInferencePromptChars
+          : settings.contextChars;
+
       // Safety check before inference to prevent model crashes from oversized context
-      if (inferencePrompt.length > _maxInferencePromptChars) {
+      if (inferencePrompt.length > maxInferencePromptChars) {
         if (!mounted) return;
         setState(() {
-          _errorText = 'Context too large for safe generation. Please use a shorter prompt or fewer attachments.';
+          _errorText =
+              'Context too large for safe generation (limit: $maxInferencePromptChars chars). Please use a shorter prompt or fewer attachments.';
           _messages.removeLast(); // Remove the empty assistant message we added
           _isGenerating = false;
           _triggerBorderShine();
@@ -1228,7 +1259,6 @@ class _ChatPageState extends State<ChatPage>
         return;
       }
 
-      final settings = _generationSettings.current;
       await for (final token in _ai.sendMessage(
         inferencePrompt,
         maxTokens: maxTokens,
@@ -1287,6 +1317,18 @@ class _ChatPageState extends State<ChatPage>
   void _stopGenerating() {
     if (!_isGenerating) return;
     _ai.stopGenerating();
+    if (!mounted) return;
+    setState(() {
+      if (_messages.isNotEmpty && !_messages.last.isUser) {
+        final last = _messages.last;
+        _messages[_messages.length - 1] = last.copyWith(
+          text: _sanitizeAssistantText(last.text),
+          timestamp: DateTime.now(),
+        );
+      }
+      _isGenerating = false;
+    });
+    _scheduleHistorySave(immediate: true);
   }
 
   void _handleBlockedBack(bool keyboardOpen) {
@@ -2383,13 +2425,7 @@ class _ChatPageState extends State<ChatPage>
     );
   }
 
-  int _countWords(String text) {
-    final cleaned = text.trim();
-    if (cleaned.isEmpty) return 0;
-    return cleaned.split(RegExp(r'\s+')).where((token) => token.isNotEmpty).length;
-  }
-
-  Future<bool> _confirmLongContextGeneration(int totalChars) async {
+  Future<bool> _confirmLargeCurrentPromptGeneration(int currentChars) async {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bg = isDark ? Colors.black : Colors.white;
     final subtitleColor =
@@ -2401,7 +2437,7 @@ class _ChatPageState extends State<ChatPage>
       builder: (context) => AlertDialog(
         backgroundColor: bg,
         title: const Text(
-          'GENERATE WITH LONG CONTEXT?',
+          'LARGE CURRENT INPUT DETECTED',
           style: TextStyle(
             fontFamily: 'Courier',
             letterSpacing: 2,
@@ -2409,7 +2445,7 @@ class _ChatPageState extends State<ChatPage>
           ),
         ),
         content: Text(
-          'You are about to generate with $totalChars characters of prompt + attachment text. This may be unstable or crash the app. Do you want to continue?',
+          'Your current prompt content is $currentChars characters (limit: $_currentPromptWarningChars). This may be unstable or crash the app. Continue anyway?',
           style: TextStyle(
             fontFamily: 'Courier',
             color: subtitleColor,
@@ -2419,7 +2455,7 @@ class _ChatPageState extends State<ChatPage>
           TextButton(
             onPressed: () => Navigator.pop(context, false),
             child: const Text(
-              'NO',
+              'CANCEL',
               style: TextStyle(
                 fontFamily: 'Courier',
                 color: Colors.grey,
@@ -2430,7 +2466,7 @@ class _ChatPageState extends State<ChatPage>
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             child: const Text(
-              'YES',
+              'CONTINUE',
               style: TextStyle(
                 fontFamily: 'Courier',
                 color: nothingRed,
@@ -2446,7 +2482,99 @@ class _ChatPageState extends State<ChatPage>
     return shouldGenerate ?? false;
   }
 
-  Future<void> _showQueuedAttachmentWordCountSnackBar() async {
+  Future<bool> _confirmContextAlmostFullGeneration(int totalChars) async {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark ? Colors.black : Colors.white;
+    final subtitleColor =
+        isDark ? const Color(0xFFA1A1AA) : const Color(0xFF4B5563);
+
+    var dontShowAgainThisSession = false;
+
+    final shouldGenerate = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setStateDialog) => AlertDialog(
+          backgroundColor: bg,
+          title: const Text(
+            'CONTEXT IS ALMOST FULL',
+            style: TextStyle(
+              fontFamily: 'Courier',
+              letterSpacing: 2,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Your total prompt context is $totalChars characters (limit: $_totalContextWarningChars). This may be unstable or crash the app. Continue anyway?',
+                style: TextStyle(
+                  fontFamily: 'Courier',
+                  color: subtitleColor,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Checkbox(
+                    value: dontShowAgainThisSession,
+                    onChanged: (value) {
+                      setStateDialog(() {
+                        dontShowAgainThisSession = value ?? false;
+                      });
+                    },
+                  ),
+                  const Expanded(
+                    child: Text(
+                      'Don\'t show again for this session',
+                      style: TextStyle(fontFamily: 'Courier', fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text(
+                'CANCEL',
+                style: TextStyle(
+                  fontFamily: 'Courier',
+                  color: Colors.grey,
+                  letterSpacing: 1.5,
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: () {
+                if (dontShowAgainThisSession) {
+                  _skipContextAlmostFullWarningForSession = true;
+                }
+                Navigator.pop(context, true);
+              },
+              child: const Text(
+                'CONTINUE',
+                style: TextStyle(
+                  fontFamily: 'Courier',
+                  color: nothingRed,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.5,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    return shouldGenerate ?? false;
+  }
+
+  Future<void> _showQueuedAttachmentContextSnackBar() async {
     if (!mounted) return;
 
     final imagesForExtraction = List<XFile>.from(_pendingImages)
@@ -2466,21 +2594,20 @@ class _ChatPageState extends State<ChatPage>
 
     if (!mounted) return;
 
-    final wordCount = _countWords(combinedText);
+    final currentPromptChars = _buildInferencePrompt(
+      combinedText,
+      includeHistory: false,
+    ).length;
     final hasQueue = _pendingImages.isNotEmpty || _pendingFiles.isNotEmpty;
-    final message = !hasQueue
-      ? 'Attachment queue cleared.'
-      : wordCount > _attachmentWarningWordThreshold
-        ? 'App might crash or be unstable due to no context left.'
-        : wordCount > 0
-          ? 'Attachment queue has $wordCount word${wordCount == 1 ? '' : 's'} total.'
-          : 'Attachment queue added, but no extractable words were found.';
+    if (!hasQueue || currentPromptChars <= _currentPromptWarningChars) {
+      return;
+    }
 
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        SnackBar(
-          content: Text(message),
+        const SnackBar(
+          content: Text('App might crash or be unstable due to long context.'),
           duration: const Duration(seconds: 4),
         ),
       );
